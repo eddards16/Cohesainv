@@ -540,7 +540,7 @@ class InventarioDashboard:
                 df_filtered, tipo='treemap', titulo='Distribución de Stock'
             )
             if fig_tree:
-                st.plotly_chart(fig_tree, use_container_width=True)
+                st.plotly_chart(fig_tree, use_container_width=True, key="tree2")
 
         # Tabla
         st.markdown("### 📋 Detalle de Stock")
@@ -748,7 +748,7 @@ class InventarioDashboard:
                     df_f, tipo='treemap', titulo='Distribución de Stock'
                 )
                 if fig_tree:
-                    st.plotly_chart(fig_tree, use_container_width=True)
+                    st.plotly_chart(fig_tree, use_container_width=True, key="tree3")
 
             st.markdown("#### 📊 Entradas vs. Salidas y % Vendido (por Producto)")
             self.generar_grafico_entradas_vs_salidas(df_f)
