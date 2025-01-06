@@ -1,12 +1,10 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from google.oauth2.credentials import Credentials
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import os
 from datetime import datetime
-import json
 
 class InventarioDashboard:
     def __init__(self):
@@ -18,33 +16,22 @@ class InventarioDashboard:
     def get_credentials(self):
         """Obtiene credenciales para Google Sheets API"""
         try:
-            # Intentar usar credenciales de Streamlit Cloud
-            if 'GOOGLE_CREDENTIALS' in st.secrets:
-                credentials_dict = st.secrets['GOOGLE_CREDENTIALS']
+            if st.secrets.has_key("gcp_service_account"):
+                credentials_dict = st.secrets["gcp_service_account"]
                 creds = service_account.Credentials.from_service_account_info(
                     credentials_dict,
                     scopes=self.SCOPES
                 )
                 return creds
             else:
-                # Para desarrollo local
-                credentials_path = 'client_secret.json'
-                if os.path.exists(credentials_path):
-                    creds = service_account.Credentials.from_service_account_file(
-                        credentials_path,
-                        scopes=self.SCOPES
-                    )
-                    return creds
-                else:
-                    st.error("No se encontraron credenciales")
-                    return None
+                st.error("No se encontraron credenciales en los secretos")
+                return None
         except Exception as e:
             st.error(f"Error al obtener credenciales: {str(e)}")
             return None
 
-    @st.cache_data(ttl=300)  # Cache por 5 minutos
     def load_data(self):
-        """Carga datos desde Google Sheets con caché"""
+        """Carga datos desde Google Sheets"""
         try:
             creds = self.get_credentials()
             if not creds:
@@ -121,7 +108,6 @@ class InventarioDashboard:
                 ]
                 salidas = salidas_df['cajas'].sum()
                 kg_salidas = salidas_df['kg'].sum()
-                
                 # Calcular stock final
                 stock = entradas + traspasos_recibidos - traspasos_enviados - salidas
                 
@@ -155,6 +141,7 @@ class InventarioDashboard:
                     })
         
         return pd.DataFrame(stock_data)
+
     def vista_comercial(self):
         """Vista específica para el equipo comercial"""
         st.subheader("Vista Comercial - Stock por Corte")
@@ -208,18 +195,18 @@ class InventarioDashboard:
             st.dataframe(detalle_producto[cols])
             
             # Gráfico de distribución por almacén
-            fig = px.pie(detalle_producto, 
-                        values='Stock', 
-                        names='Almacén',
-                        title=f"Distribución de Stock por Almacén - {producto_seleccionado}")
-            st.plotly_chart(fig, use_container_width=True)
+            if not detalle_producto.empty:
+                fig = px.pie(detalle_producto, 
+                            values='Stock', 
+                            names='Almacén',
+                            title=f"Distribución de Stock por Almacén - {producto_seleccionado}")
+                st.plotly_chart(fig, use_container_width=True)
 
     def stock_view(self):
         st.subheader("Stock Actual por Almacén")
         
         # Obtener stock actual
         stock_df = self.calcular_stock_actual()
-        
         # Crear tabs para diferentes vistas
         tab1, tab2, tab3 = st.tabs(["Resumen", "Detalle por Almacén", "Movimientos"])
         
@@ -268,6 +255,7 @@ class InventarioDashboard:
             movimientos = self.df[self.df['almacen'] == almacen_seleccionado].copy()
             st.dataframe(movimientos[['nombre', 'movimiento', 'almacen', 'almacen actual', 
                                     'cajas', 'kg', 'cliente']])
+
     def ventas_view(self):
         st.subheader("Análisis de Ventas")
         
@@ -308,7 +296,6 @@ class InventarioDashboard:
                     'precio total': 'sum'
                 }).round(2)
                 st.dataframe(ventas_cliente, use_container_width=True)
-
     def movimientos_view(self):
         st.subheader("Registro de Movimientos")
         
@@ -327,7 +314,7 @@ class InventarioDashboard:
         with col3:
             vendedor_select = st.multiselect(
                 "Vendedor",
-                options=sorted(self.df['vendedor'].unique())
+                options=[v for v in self.df['vendedor'].unique() if str(v).strip()]
             )
         
         # Aplicar filtros
@@ -374,7 +361,6 @@ class InventarioDashboard:
             st.write("Última actualización:", datetime.now().strftime("%H:%M:%S"))
         with col2:
             if st.button('🔄 Actualizar'):
-                st.cache_data.clear()
                 st.experimental_rerun()
 
         if not self.load_data():
