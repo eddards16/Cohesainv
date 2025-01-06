@@ -2,10 +2,11 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
-import os.path
+import os
+from datetime import datetime
+import json
 
 class InventarioDashboard:
     def __init__(self):
@@ -15,32 +16,50 @@ class InventarioDashboard:
         self.df = None
 
     def get_credentials(self):
-        creds = None
-        if os.path.exists('token.json'):
-            creds = Credentials.from_authorized_user_file('token.json', self.SCOPES)
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    'client_secret.json', self.SCOPES)
-                creds = flow.run_local_server(port=8080)
-            with open('token.json', 'w') as token:
-                token.write(creds.to_json())
-        return creds
-
-    def load_data(self):
-        creds = self.get_credentials()
+        """Obtiene credenciales para Google Sheets API"""
         try:
+            # Intentar usar credenciales de Streamlit Cloud
+            if 'GOOGLE_CREDENTIALS' in st.secrets:
+                credentials_dict = st.secrets['GOOGLE_CREDENTIALS']
+                creds = service_account.Credentials.from_service_account_info(
+                    credentials_dict,
+                    scopes=self.SCOPES
+                )
+                return creds
+            else:
+                # Para desarrollo local
+                credentials_path = 'client_secret.json'
+                if os.path.exists(credentials_path):
+                    creds = service_account.Credentials.from_service_account_file(
+                        credentials_path,
+                        scopes=self.SCOPES
+                    )
+                    return creds
+                else:
+                    st.error("No se encontraron credenciales")
+                    return None
+        except Exception as e:
+            st.error(f"Error al obtener credenciales: {str(e)}")
+            return None
+
+    @st.cache_data(ttl=300)  # Cache por 5 minutos
+    def load_data(self):
+        """Carga datos desde Google Sheets con caché"""
+        try:
+            creds = self.get_credentials()
+            if not creds:
+                return False
+
             service = build('sheets', 'v4', credentials=creds)
             sheet = service.spreadsheets()
             result = sheet.values().get(
                 spreadsheetId=self.SPREADSHEET_ID,
                 range=self.RANGE_NAME
             ).execute()
-            values = result.get('values', [])
             
+            values = result.get('values', [])
             if not values:
+                st.error("No se encontraron datos en la hoja")
                 return False
                 
             self.df = pd.DataFrame(values[1:], columns=values[0])
@@ -171,6 +190,7 @@ class InventarioDashboard:
                             y=['% Vendido', '% Disponible'],
                             title="Porcentaje Vendido vs Disponible por Producto",
                             barmode='stack')
+                fig.update_layout(xaxis_tickangle=-45)
                 st.plotly_chart(fig, use_container_width=True)
         
         with tab2:
@@ -186,6 +206,13 @@ class InventarioDashboard:
             st.markdown(f"### Detalle de {producto_seleccionado}")
             cols = ['Almacén', 'Stock', 'Total Inicial', 'Salidas', '% Vendido', '% Disponible']
             st.dataframe(detalle_producto[cols])
+            
+            # Gráfico de distribución por almacén
+            fig = px.pie(detalle_producto, 
+                        values='Stock', 
+                        names='Almacén',
+                        title=f"Distribución de Stock por Almacén - {producto_seleccionado}")
+            st.plotly_chart(fig, use_container_width=True)
 
     def stock_view(self):
         st.subheader("Stock Actual por Almacén")
@@ -232,6 +259,7 @@ class InventarioDashboard:
             # Gráfico de barras del stock por producto
             fig = px.bar(stock_almacen, x='Producto', y='Stock',
                         title=f'Stock por Producto en {almacen_seleccionado}')
+            fig.update_layout(xaxis_tickangle=-45)
             st.plotly_chart(fig, use_container_width=True)
         
         with tab3:
@@ -240,7 +268,6 @@ class InventarioDashboard:
             movimientos = self.df[self.df['almacen'] == almacen_seleccionado].copy()
             st.dataframe(movimientos[['nombre', 'movimiento', 'almacen', 'almacen actual', 
                                     'cajas', 'kg', 'cliente']])
-
     def ventas_view(self):
         st.subheader("Análisis de Ventas")
         
@@ -248,33 +275,45 @@ class InventarioDashboard:
         ventas = ventas[ventas['precio'] > 0]
 
         if not ventas.empty:
-            col1, col2 = st.columns(2)
+            tab1, tab2 = st.tabs(["Resumen de Ventas", "Detalle por Cliente"])
             
-            with col1:
-                st.markdown("### Top Ventas por Monto")
-                ventas_producto = ventas.groupby('nombre').agg({
+            with tab1:
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("### Top Ventas por Monto")
+                    ventas_producto = ventas.groupby('nombre').agg({
+                        'cajas': 'sum',
+                        'kg': 'sum',
+                        'precio total': 'sum'
+                    }).round(2)
+                    ventas_producto = ventas_producto.sort_values('precio total', ascending=False)
+                    st.dataframe(ventas_producto, use_container_width=True)
+
+                with col2:
+                    st.markdown("### Distribución de Ventas")
+                    fig = px.pie(
+                        ventas_producto.reset_index(),
+                        values='precio total',
+                        names='nombre',
+                        title="Distribución de Ventas por Producto"
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            with tab2:
+                st.markdown("### Ventas por Cliente")
+                ventas_cliente = ventas.groupby(['cliente', 'nombre']).agg({
                     'cajas': 'sum',
                     'kg': 'sum',
                     'precio total': 'sum'
                 }).round(2)
-                ventas_producto = ventas_producto.sort_values('precio total', ascending=False)
-                st.dataframe(ventas_producto, use_container_width=True)
-
-            with col2:
-                st.markdown("### Distribución de Ventas")
-                fig = px.pie(
-                    ventas_producto.reset_index(),
-                    values='precio total',
-                    names='nombre',
-                    title="Distribución de Ventas por Producto"
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                st.dataframe(ventas_cliente, use_container_width=True)
 
     def movimientos_view(self):
         st.subheader("Registro de Movimientos")
         
         # Filtros
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
             tipo_movimiento = st.multiselect(
                 "Tipo de Movimiento",
@@ -285,6 +324,11 @@ class InventarioDashboard:
                 "Almacén",
                 options=sorted(self.df['almacen'].unique())
             )
+        with col3:
+            vendedor_select = st.multiselect(
+                "Vendedor",
+                options=sorted(self.df['vendedor'].unique())
+            )
         
         # Aplicar filtros
         df_mov = self.df.copy()
@@ -292,17 +336,46 @@ class InventarioDashboard:
             df_mov = df_mov[df_mov['movimiento'].isin(tipo_movimiento)]
         if almacen_select:
             df_mov = df_mov[df_mov['almacen'].isin(almacen_select)]
+        if vendedor_select:
+            df_mov = df_mov[df_mov['vendedor'].isin(vendedor_select)]
         
         # Mostrar movimientos
-        st.dataframe(
-            df_mov[['id', 'nombre', 'movimiento', 'almacen', 'almacen actual', 
-                    'cajas', 'kg', 'vendedor', 'cliente']].sort_values('id'),
-            use_container_width=True
-        )
+        tab1, tab2 = st.tabs(["Vista Detallada", "Resumen"])
+        
+        with tab1:
+            st.dataframe(
+                df_mov[['id', 'nombre', 'movimiento', 'almacen', 'almacen actual', 
+                        'cajas', 'kg', 'vendedor', 'cliente']].sort_values('id'),
+                use_container_width=True
+            )
+        
+        with tab2:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("### Movimientos por Tipo")
+                mov_summary = df_mov.groupby('movimiento').agg({
+                    'cajas': 'sum',
+                    'kg': 'sum'
+                }).round(2)
+                st.dataframe(mov_summary)
+            
+            with col2:
+                st.markdown("### Distribución de Movimientos")
+                fig = px.pie(df_mov, names='movimiento', title="Tipos de Movimientos")
+                st.plotly_chart(fig, use_container_width=True)
 
     def run_dashboard(self):
         st.set_page_config(page_title="Inventario COHESA", layout="wide")
         st.title("Dashboard de Inventario COHESA")
+
+        # Información de actualización y botón de recarga
+        col1, col2 = st.sidebar.columns([2,1])
+        with col1:
+            st.write("Última actualización:", datetime.now().strftime("%H:%M:%S"))
+        with col2:
+            if st.button('🔄 Actualizar'):
+                st.cache_data.clear()
+                st.experimental_rerun()
 
         if not self.load_data():
             st.error("Error al cargar los datos")
