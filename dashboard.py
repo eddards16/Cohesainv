@@ -1,4 +1,12 @@
 import streamlit as st
+# Configuración de la página - DEBE SER LA PRIMERA LÍNEA DE STREAMLIT
+st.set_page_config(
+    page_title="Inventario COHESA",
+    page_icon="📦",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -7,14 +15,6 @@ from googleapiclient.discovery import build
 import os
 from datetime import datetime
 import numpy as np
-
-# Configuración inicial de la página
-st.set_page_config(
-    page_title="Inventario COHESA",
-    page_icon="📦",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
 # Aplicar estilos CSS personalizados
 st.markdown("""
@@ -873,14 +873,6 @@ class InventarioDashboard:
 
     def run_dashboard(self):
         """Función principal del dashboard con diseño mejorado"""
-        # Configuración de la página
-        st.set_page_config(
-            page_title="Inventario COHESA",
-            page_icon="📦",
-            layout="wide",
-            initial_sidebar_state="expanded"
-        )
-
         # Título principal con estilo mejorado
         st.markdown("""
             <h1 style='text-align: center; color: {}; padding: 1rem 0;'>
