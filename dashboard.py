@@ -741,7 +741,7 @@ class InventarioDashboard:
                     df_f, tipo='barras', titulo='Stock por Producto y Estado'
                 )
                 if fig_stock:
-                    st.plotly_chart(fig_stock, use_container_width=True)
+                    st.plotly_chart(fig_stock, use_container_width=True, key="key_grafico1")
 
             with col2:
                 fig_tree = self.generar_grafico_stock(
