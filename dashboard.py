@@ -91,7 +91,7 @@ class InventarioDashboard:
         self.df = None
         self.analytics = InventarioAnalytics()
         
-        # Esquema de colores mejorado
+        # Configuración de colores y estilos
         self.COLOR_SCHEME = {
             'primary': '#1f77b4',
             'secondary': '#ff7f0e',
@@ -102,7 +102,7 @@ class InventarioDashboard:
             'text': '#2c3e50'
         }
         
-        # Estados de stock con colores mejorados
+        # Configuración de estados
         self.ESTADOS_STOCK = {
             'CRÍTICO': {'umbral': 5, 'color': '#e74c3c'},
             'BAJO': {'umbral': 20, 'color': '#f39c12'},
@@ -133,7 +133,7 @@ class InventarioDashboard:
             return None
 
     def load_data(self):
-        """Carga y preprocesa los datos con validaciones mejoradas"""
+        """Carga y preprocesa los datos"""
         try:
             with st.spinner('Cargando datos...'):
                 creds = self.get_credentials()
@@ -152,7 +152,7 @@ class InventarioDashboard:
                     st.error("📊 No se encontraron datos en la hoja de cálculo")
                     return False
                 
-                # Crear DataFrame con validaciones mejoradas
+                # Crear DataFrame
                 self.df = pd.DataFrame(values[1:], columns=values[0])
                 
                 # Validar columnas requeridas
@@ -163,7 +163,7 @@ class InventarioDashboard:
                     st.error(f"❌ Faltan columnas requeridas: {', '.join(missing_columns)}")
                     return False
                 
-                # Convertir y validar columnas numéricas con mejor manejo de errores
+                # Convertir columnas numéricas
                 numeric_columns = ['cajas', 'kg', 'precio', 'precio total']
                 for col in numeric_columns:
                     self.df[col] = pd.to_numeric(
@@ -171,17 +171,10 @@ class InventarioDashboard:
                         errors='coerce'
                     ).fillna(0)
                 
-                # Limpiar y estandarizar datos
+                # Limpiar datos
                 self.df['movimiento'] = self.df['movimiento'].str.upper()
                 self.df['almacen'] = self.df['almacen'].str.strip()
-                self.df['almacen actual'] = self.df['almacen actual'].str.strip()
-                
-                # Validar movimientos
-                movimientos_validos = {'ENTRADA', 'SALIDA', 'TRASPASO'}
-                movimientos_invalidos = set(self.df['movimiento'].unique()) - movimientos_validos
-                if movimientos_invalidos:
-                    st.warning(f"⚠️ Se encontraron movimientos no estándar: {', '.join(movimientos_invalidos)}")
-                
+                self.df['almacen actual'] = self.df['almacen actual'].str.strip()               
                 st.success("✅ Datos cargados exitosamente")
                 return True
                 
@@ -189,6 +182,44 @@ class InventarioDashboard:
             st.error(f"❌ Error durante la carga de datos: {str(e)}")
             return False
 
+    def calcular_metricas_generales(self, stock_df):
+        """Calcula métricas generales del inventario"""
+        try:
+            if stock_df.empty:
+                return {
+                    'Total Productos': 0,
+                    'Total Almacenes': 0,
+                    'Total Lotes': 0,
+                    'Total Cajas en Stock': 0,
+                    'Total Kg en Stock': 0,
+                    'Total Ventas ($)': 0,
+                    'Productos en Estado Crítico': 0,
+                    'Rotación Promedio (%)': 0
+                }
+
+            return {
+                'Total Productos': len(stock_df['Producto'].unique()),
+                'Total Almacenes': len(stock_df['Almacén'].unique()),
+                'Total Lotes': len(stock_df['Lote'].unique()),
+                'Total Cajas en Stock': stock_df['Stock'].sum(),
+                'Total Kg en Stock': stock_df['Kg Total'].sum(),
+                'Total Ventas ($)': stock_df['Ventas Total'].sum(),
+                'Productos en Estado Crítico': len(stock_df[stock_df['Estado Stock'] == 'CRÍTICO']),
+                'Rotación Promedio (%)': stock_df['Rotación'].mean()
+            }
+                
+        except Exception as e:
+            st.error(f"❌ Error en el cálculo de métricas generales: {str(e)}")
+            return {
+                'Total Productos': 0,
+                'Total Almacenes': 0,
+                'Total Lotes': 0,
+                'Total Cajas en Stock': 0,
+                'Total Kg en Stock': 0,
+                'Total Ventas ($)': 0,
+                'Productos en Estado Crítico': 0,
+                'Rotación Promedio (%)': 0
+            }
     def calcular_stock_actual(self):
         """Calcula el stock actual con análisis detallado"""
         try:
@@ -215,6 +246,7 @@ class InventarioDashboard:
                             # Actualizar progreso
                             current_item += 1
                             progress_bar.progress(current_item / total_items)
+
                             # Filtrar datos relevantes
                             df_filtrado = self.df[
                                 (self.df['nombre'] == producto) & 
@@ -256,7 +288,7 @@ class InventarioDashboard:
                             stock = total_inicial - traspasos_enviados - salidas
                             kg_total = kg_entradas + kg_traspasos_recibidos - kg_traspasos_enviados - kg_salidas
                             
-                            # Calcular métricas
+                            # Calcular porcentajes
                             porcentaje_vendido = self.analytics.calcular_porcentaje(salidas, total_inicial)
                             porcentaje_disponible = self.analytics.calcular_porcentaje(stock, total_inicial)
                             rotacion = self.analytics.calcular_porcentaje(salidas, total_inicial) if total_inicial > 0 else 0
@@ -311,6 +343,23 @@ class InventarioDashboard:
             st.error(f"❌ Error en el cálculo de stock: {str(e)}")
             return pd.DataFrame()
 
+    def mostrar_metricas(self, metricas, columnas=4):
+        """Muestra métricas en un formato visual mejorado"""
+        cols = st.columns(columnas)
+        
+        for i, (titulo, valor) in enumerate(metricas.items()):
+            with cols[i % columnas]:
+                st.markdown(f"""
+                    <div class="metric-card">
+                        <h4 style="color: {self.COLOR_SCHEME['text']}; margin-bottom: 8px;">
+                            {titulo}
+                        </h4>
+                        <p style="font-size: 24px; font-weight: bold; color: {self.COLOR_SCHEME['primary']}; margin: 0;">
+                            {valor:,.2f}
+                        </p>
+                    </div>
+                    """, unsafe_allow_html=True)
+
     def generar_grafico_stock(self, stock_df, tipo='barras', titulo='', filtro=None):
         """Genera gráficos personalizados para el análisis de stock"""
         try:
@@ -353,6 +402,7 @@ class InventarioDashboard:
                     height=500,
                     bargap=0.2
                 )
+            
             elif tipo == 'pie':
                 fig = px.pie(
                     stock_df,
@@ -384,81 +434,11 @@ class InventarioDashboard:
                 )
                 fig.update_layout(**layout_config)
             
-            # Añadir marca de agua
-            fig.add_annotation(
-                text="COHESA Inventory",
-                xref="paper",
-                yref="paper",
-                x=0.5,
-                y=-0.2,
-                showarrow=False,
-                font=dict(size=10, color="lightgrey"),
-                opacity=0.5
-            )
-
             return fig
 
         except Exception as e:
             st.error(f"❌ Error al generar gráfico: {str(e)}")
             return None
-
-    def mostrar_metricas(self, metricas, columnas=4):
-        """Muestra métricas en un formato visual mejorado"""
-        cols = st.columns(columnas)
-        
-        for i, (titulo, valor) in enumerate(metricas.items()):
-            with cols[i % columnas]:
-                st.markdown(f"""
-                    <div class="metric-card">
-                        <h4 style="color: {self.COLOR_SCHEME['text']}; margin-bottom: 8px;">
-                            {titulo}
-                        </h4>
-                        <p style="font-size: 24px; font-weight: bold; color: {self.COLOR_SCHEME['primary']}; margin: 0;">
-                            {valor:,.2f}
-                        </p>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-def calcular_metricas_generales(self, stock_df):
-        """Calcula métricas generales del inventario"""
-        try:
-            if stock_df.empty:
-                return {
-                    'Total Productos': 0,
-                    'Total Almacenes': 0,
-                    'Total Lotes': 0,
-                    'Total Cajas en Stock': 0,
-                    'Total Kg en Stock': 0,
-                    'Total Ventas ($)': 0,
-                    'Productos en Estado Crítico': 0,
-                    'Rotación Promedio (%)': 0
-                }
-
-            return {
-                'Total Productos': len(stock_df['Producto'].unique()),
-                'Total Almacenes': len(stock_df['Almacén'].unique()),
-                'Total Lotes': len(stock_df['Lote'].unique()),
-                'Total Cajas en Stock': stock_df['Stock'].sum(),
-                'Total Kg en Stock': stock_df['Kg Total'].sum(),
-                'Total Ventas ($)': stock_df['Ventas Total'].sum(),
-                'Productos en Estado Crítico': len(stock_df[stock_df['Estado Stock'] == 'CRÍTICO']),
-                'Rotación Promedio (%)': stock_df['Rotación'].mean()
-            }
-                
-        except Exception as e:
-            st.error(f"❌ Error en el cálculo de métricas generales: {str(e)}")
-            return {
-                'Total Productos': 0,
-                'Total Almacenes': 0,
-                'Total Lotes': 0,
-                'Total Cajas en Stock': 0,
-                'Total Kg en Stock': 0,
-                'Total Ventas ($)': 0,
-                'Productos en Estado Crítico': 0,
-                'Rotación Promedio (%)': 0
-            }
-
-
     def stock_view(self):
         """Vista principal del stock con diseño mejorado"""
         st.markdown("""
@@ -518,7 +498,7 @@ def calcular_metricas_generales(self, stock_df):
             fig_stock = self.generar_grafico_stock(
                 df_filtered,
                 tipo='barras',
-                titulo='Stock por Producto y Estado',
+                titulo='Stock por Producto y Estado'
             )
             if fig_stock:
                 st.plotly_chart(fig_stock, use_container_width=True, key='stock_bar_main')
@@ -527,7 +507,7 @@ def calcular_metricas_generales(self, stock_df):
             fig_dist = self.generar_grafico_stock(
                 df_filtered,
                 tipo='treemap',
-                titulo='Distribución de Stock',
+                titulo='Distribución de Stock'
             )
             if fig_dist:
                 st.plotly_chart(fig_dist, use_container_width=True, key='stock_tree_main')
@@ -542,6 +522,7 @@ def calcular_metricas_generales(self, stock_df):
             use_container_width=True,
             height=400
         )
+
     def ventas_view(self):
         """Vista detallada de ventas con diseño mejorado"""
         st.markdown("""
@@ -624,7 +605,6 @@ def calcular_metricas_generales(self, stock_df):
             ventas_cliente = ventas_cliente.sort_values('precio total', ascending=False)
             
             st.dataframe(ventas_cliente, use_container_width=True)
-            
             # Análisis detallado por cliente
             st.markdown("### 🔍 Detalle por Cliente")
             cliente_seleccionado = st.selectbox(
@@ -713,21 +693,22 @@ def calcular_metricas_generales(self, stock_df):
                 use_container_width=True,
                 height=400
             )
+
     def vista_comercial(self):
-        """Vista comercial con análisis detallado y diseño mejorado"""
+        """Vista comercial con análisis detallado"""
         st.markdown("""
             <h2 style='color: {}; margin-bottom: 20px;'>
                 🎯 Vista Comercial - Análisis de Stock y Ventas
             </h2>
         """.format(self.COLOR_SCHEME['text']), unsafe_allow_html=True)
         
-        # Obtener datos
+        # Obtener datos de stock
         stock_df = self.calcular_stock_actual()
         if stock_df.empty:
             st.warning("⚠️ No hay datos disponibles para mostrar")
             return
 
-        # Filtros superiores con diseño mejorado
+        # Filtros superiores
         with st.container():
             st.markdown("### 🔍 Filtros de Análisis")
             col1, col2, col3 = st.columns(3)
@@ -786,7 +767,7 @@ def calcular_metricas_generales(self, stock_df):
                 fig_dist = self.generar_grafico_stock(
                     df_filtered,
                     tipo='treemap',
-                    titulo='Distribución de Stock por Almacén y Producto'
+                    titulo='Distribución de Stock'
                 )
                 if fig_dist:
                     st.plotly_chart(fig_dist, use_container_width=True, key='comercial_stock_tree')
@@ -912,7 +893,7 @@ def calcular_metricas_generales(self, stock_df):
                     st.plotly_chart(fig_estados, use_container_width=True, key='comercial_alm_pie')
 
     def run_dashboard(self):
-        """Función principal del dashboard con diseño mejorado"""
+        """Función principal del dashboard"""
         # Título principal con estilo mejorado
         st.markdown("""
             <h1 style='text-align: center; color: {}; padding: 1rem 0;'>
