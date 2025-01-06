@@ -56,7 +56,7 @@ class InventarioDashboard:
         }
 
     def get_credentials(self):
-        """Obtiene credenciales para Google Sheets API con manejo de errores mejorado"""
+        """Obtiene credenciales para Google Sheets API"""
         try:
             if st.secrets.has_key("gcp_service_account"):
                 credentials_dict = st.secrets["gcp_service_account"]
@@ -66,7 +66,6 @@ class InventarioDashboard:
                 )
                 return creds
             else:
-                # Intenta cargar credenciales locales
                 if os.path.exists('client_secret.json'):
                     creds = service_account.Credentials.from_service_account_file(
                         'client_secret.json',
@@ -81,7 +80,7 @@ class InventarioDashboard:
             return None
 
     def load_data(self):
-        """Carga y preprocesa los datos con validaciones mejoradas"""
+        """Carga y preprocesa los datos"""
         try:
             creds = self.get_credentials()
             if not creds:
@@ -110,7 +109,7 @@ class InventarioDashboard:
                 st.error(f"Faltan columnas requeridas: {', '.join(missing_columns)}")
                 return False
             
-            # Convertir y validar columnas numéricas
+            # Convertir columnas numéricas
             numeric_columns = ['cajas', 'kg', 'precio', 'precio total']
             for col in numeric_columns:
                 self.df[col] = pd.to_numeric(
@@ -118,16 +117,10 @@ class InventarioDashboard:
                     errors='coerce'
                 ).fillna(0)
             
-            # Limpiar y estandarizar datos
+            # Limpiar datos
             self.df['movimiento'] = self.df['movimiento'].str.upper()
             self.df['almacen'] = self.df['almacen'].str.strip()
             self.df['almacen actual'] = self.df['almacen actual'].str.strip()
-            
-            # Validar valores únicos esperados
-            movimientos_validos = {'ENTRADA', 'SALIDA', 'TRASPASO'}
-            movimientos_invalidos = set(self.df['movimiento'].unique()) - movimientos_validos
-            if movimientos_invalidos:
-                st.warning(f"Se encontraron movimientos no estándar: {movimientos_invalidos}")
             
             return True
             
@@ -135,10 +128,7 @@ class InventarioDashboard:
             st.error(f"Error durante la carga de datos: {str(e)}")
             return False
     def calcular_stock_actual(self):
-        """
-        Calcula el stock actual con análisis detallado por producto, lote y almacén
-        Incluye métricas adicionales y validaciones
-        """
+        """Calcula el stock actual con análisis detallado"""
         try:
             stock_data = []
             todos_productos = self.df['nombre'].unique()
@@ -148,7 +138,7 @@ class InventarioDashboard:
                 self.df['almacen actual']
             ]).unique()
             
-            # Limpiar y validar almacenes
+            # Limpiar almacenes
             todos_almacenes = [a for a in todos_almacenes if pd.notna(a) and str(a).strip() != '']
             
             for producto in todos_productos:
@@ -160,7 +150,7 @@ class InventarioDashboard:
                             (self.df['lote'] == lote)
                         ]
                         
-                        # 1. Entradas directas
+                        # Calcular movimientos
                         entradas_df = df_filtrado[
                             (df_filtrado['movimiento'] == 'ENTRADA') & 
                             (df_filtrado['almacen'] == almacen)
@@ -168,7 +158,6 @@ class InventarioDashboard:
                         entradas = entradas_df['cajas'].sum()
                         kg_entradas = entradas_df['kg'].sum()
                         
-                        # 2. Traspasos recibidos
                         traspasos_recibidos_df = df_filtrado[
                             (df_filtrado['movimiento'] == 'TRASPASO') & 
                             (df_filtrado['almacen actual'] == almacen)
@@ -176,7 +165,6 @@ class InventarioDashboard:
                         traspasos_recibidos = traspasos_recibidos_df['cajas'].sum()
                         kg_traspasos_recibidos = traspasos_recibidos_df['kg'].sum()
                         
-                        # 3. Traspasos enviados
                         traspasos_enviados_df = df_filtrado[
                             (df_filtrado['movimiento'] == 'TRASPASO') & 
                             (df_filtrado['almacen'] == almacen)
@@ -184,7 +172,6 @@ class InventarioDashboard:
                         traspasos_enviados = traspasos_enviados_df['cajas'].sum()
                         kg_traspasos_enviados = traspasos_enviados_df['kg'].sum()
                         
-                        # 4. Salidas (ventas)
                         salidas_df = df_filtrado[
                             (df_filtrado['movimiento'] == 'SALIDA') & 
                             (df_filtrado['almacen'] == almacen)
@@ -193,16 +180,16 @@ class InventarioDashboard:
                         kg_salidas = salidas_df['kg'].sum()
                         ventas_total = salidas_df['precio total'].sum()
                         
-                        # Cálculos de stock y métricas
+                        # Cálculos finales
                         total_inicial = entradas + traspasos_recibidos
                         stock = total_inicial - traspasos_enviados - salidas
                         kg_total = kg_entradas + kg_traspasos_recibidos - kg_traspasos_enviados - kg_salidas
                         
-                        # Cálculo de porcentajes
+                        # Calcular porcentajes
                         porcentaje_vendido = self.analytics.calcular_porcentaje(salidas, total_inicial)
                         porcentaje_disponible = self.analytics.calcular_porcentaje(stock, total_inicial)
                         
-                        # Determinar estado del stock
+                        # Determinar estado
                         estado_stock = 'NORMAL'
                         for estado, config in self.ESTADOS_STOCK.items():
                             if stock <= config['umbral']:
@@ -211,9 +198,8 @@ class InventarioDashboard:
                         
                         # Calcular métricas adicionales
                         rotacion = self.analytics.calcular_porcentaje(salidas, total_inicial) if total_inicial > 0 else 0
-                        dias_inventario = 0  # TODO: Implementar cálculo de días de inventario
                         
-                        # Solo agregar si hay movimientos o stock
+                        # Agregar datos si hay movimientos
                         if total_inicial > 0 or stock != 0:
                             stock_data.append({
                                 'Almacén': almacen,
@@ -231,20 +217,19 @@ class InventarioDashboard:
                                 '% Disponible': porcentaje_disponible,
                                 'Estado Stock': estado_stock,
                                 'Rotación': rotacion,
-                                'Días Inventario': dias_inventario,
+                                'Días Inventario': 0,
                                 'Kg Entradas': kg_entradas,
                                 'Kg Traspasos Recibidos': kg_traspasos_recibidos,
                                 'Kg Traspasos Enviados': kg_traspasos_enviados,
                                 'Kg Salidas': kg_salidas
                             })
             
-            # Convertir a DataFrame y validar resultados
+            # Crear DataFrame final
             stock_df = pd.DataFrame(stock_data)
             if stock_df.empty:
                 st.warning("No se encontraron datos de stock para mostrar")
                 return pd.DataFrame()
                 
-            # Ordenar y limpiar datos
             stock_df = stock_df.sort_values(['Almacén', 'Producto', 'Lote'])
             stock_df = stock_df.round(2)
             
@@ -257,7 +242,7 @@ class InventarioDashboard:
     def calcular_metricas_generales(self, stock_df):
         """Calcula métricas generales del inventario"""
         try:
-            metricas = {
+            return {
                 'Total Productos': len(stock_df['Producto'].unique()),
                 'Total Almacenes': len(stock_df['Almacén'].unique()),
                 'Total Lotes': len(stock_df['Lote'].unique()),
@@ -267,14 +252,12 @@ class InventarioDashboard:
                 'Productos en Estado Crítico': len(stock_df[stock_df['Estado Stock'] == 'CRÍTICO']),
                 'Rotación Promedio (%)': stock_df['Rotación'].mean()
             }
-            
-            return metricas
-            
         except Exception as e:
             st.error(f"Error en el cálculo de métricas generales: {str(e)}")
             return {}
+
     def generar_grafico_stock(self, stock_df, tipo='barras', titulo='', filtro=None):
-        """Genera gráficos personalizados para el análisis de stock"""
+        """Genera gráficos de análisis"""
         try:
             if stock_df.empty:
                 return None
@@ -331,6 +314,134 @@ class InventarioDashboard:
             st.error(f"Error al generar gráfico: {str(e)}")
             return None
 
+    def stock_view(self):
+        """Vista principal del stock"""
+        st.subheader("Vista General de Stock")
+        
+        # Obtener datos de stock
+        stock_df = self.calcular_stock_actual()
+        if stock_df.empty:
+            st.warning("No hay datos disponibles para mostrar")
+            return
+
+        # Filtros superiores
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            lote_filter = st.multiselect(
+                "Filtrar por Lote",
+                options=sorted(stock_df['Lote'].unique()),
+                key="stock_lote_filter"
+            )
+        with col2:
+            almacen_filter = st.multiselect(
+                "Filtrar por Almacén",
+                options=sorted(stock_df['Almacén'].unique()),
+                key="stock_almacen_filter"
+            )
+        with col3:
+            estado_filter = st.multiselect(
+                "Filtrar por Estado",
+                options=sorted(stock_df['Estado Stock'].unique()),
+                key="stock_estado_filter"
+            )
+
+        # Aplicar filtros
+        df_filtered = stock_df.copy()
+        if lote_filter:
+            df_filtered = df_filtered[df_filtered['Lote'].isin(lote_filter)]
+        if almacen_filter:
+            df_filtered = df_filtered[df_filtered['Almacén'].isin(almacen_filter)]
+        if estado_filter:
+            df_filtered = df_filtered[df_filtered['Estado Stock'].isin(estado_filter)]
+
+        # Mostrar métricas
+        metricas = self.calcular_metricas_generales(df_filtered)
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric(
+                "Total Cajas en Stock",
+                f"{metricas['Total Cajas en Stock']:,.0f}",
+                delta=None
+            )
+        with col2:
+            st.metric(
+                "Total Kg en Stock",
+                f"{metricas['Total Kg en Stock']:,.2f}",
+                delta=None
+            )
+        with col3:
+            st.metric(
+                "Productos en Estado Crítico",
+                f"{metricas['Productos en Estado Crítico']}",
+                delta=None
+            )
+        with col4:
+            st.metric(
+                "Rotación Promedio",
+                f"{metricas['Rotación Promedio (%)']:.1f}%",
+                delta=None
+            )
+
+        # Mostrar tabla detallada
+        st.markdown("### Detalle de Stock")
+        st.dataframe(
+            df_filtered[[
+                'Almacén', 'Producto', 'Lote', 'Stock', 'Kg Total',
+                'Estado Stock', '% Disponible', 'Rotación'
+            ]].sort_values(['Almacén', 'Producto']),
+            use_container_width=True
+        )
+
+        # Gráficos
+        col1, col2 = st.columns(2)
+        with col1:
+            fig_stock = self.generar_grafico_stock(
+                df_filtered,
+                tipo='barras',
+                titulo='Stock por Producto y Estado'
+            )
+            if fig_stock:
+                st.plotly_chart(fig_stock, use_container_width=True)
+
+        with col2:
+            fig_dist = self.generar_grafico_stock(
+                df_filtered,
+                tipo='treemap',
+                titulo='Distribución de Stock por Almacén y Producto'
+            )
+            if fig_dist:
+                st.plotly_chart(fig_dist, use_container_width=True)
+
+    def run_dashboard(self):
+        """Función principal del dashboard"""
+        st.set_page_config(page_title="Inventario COHESA", layout="wide")
+        st.title("Dashboard de Inventario COHESA")
+
+        # Información de actualización
+        col1, col2 = st.sidebar.columns([2,1])
+        with col1:
+            st.write("Última actualización:", datetime.now().strftime("%H:%M:%S"))
+        with col2:
+            if st.button('🔄 Actualizar', key="refresh_button"):
+                st.cache_data.clear()
+                st.rerun()  # Actualizado de experimental_rerun a rerun
+
+        if not self.load_data():
+            st.error("Error al cargar los datos")
+            return
+
+        # Tabs principales
+        tab1, tab2, tab3 = st.tabs(["Stock", "Ventas", "Vista Comercial"])
+        
+        with tab1:
+            self.stock_view()
+        
+        with tab2:
+            self.ventas_view()
+        
+        with tab3:
+            self.vista_comercial()
     def vista_comercial(self):
         """Vista específica para el equipo comercial con análisis detallado"""
         st.subheader("Vista Comercial - Análisis de Stock y Ventas")
@@ -585,6 +696,7 @@ class InventarioDashboard:
                         title=f"Distribución por Estado de Stock - {almacen_seleccionado}"
                     )
                     st.plotly_chart(fig_estados, use_container_width=True)
+
     def ventas_view(self):
         """Vista detallada de ventas y análisis comercial"""
         st.subheader("Análisis de Ventas")
@@ -748,36 +860,6 @@ class InventarioDashboard:
                 ]].sort_values(['cliente', 'nombre']),
                 use_container_width=True
             )
-
-    def run_dashboard(self):
-        """Función principal para ejecutar el dashboard"""
-        st.set_page_config(page_title="Inventario COHESA", layout="wide")
-        st.title("Dashboard de Inventario COHESA")
-
-        # Información de actualización y botón de recarga
-        col1, col2 = st.sidebar.columns([2,1])
-        with col1:
-            st.write("Última actualización:", datetime.now().strftime("%H:%M:%S"))
-        with col2:
-            if st.button('🔄 Actualizar', key="refresh_button"):
-                st.cache_data.clear()
-                st.experimental_rerun()
-
-        if not self.load_data():
-            st.error("Error al cargar los datos")
-            return
-
-        # Tabs principales
-        tab1, tab2, tab3 = st.tabs(["Stock", "Ventas", "Vista Comercial"])
-        
-        with tab1:
-            self.stock_view()
-        
-        with tab2:
-            self.ventas_view()
-        
-        with tab3:
-            self.vista_comercial()
 
 if __name__ == '__main__':
     dashboard = InventarioDashboard()
