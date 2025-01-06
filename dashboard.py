@@ -418,10 +418,35 @@ class InventarioDashboard:
                         </p>
                     </div>
                     """, unsafe_allow_html=True)
-    def calcular_metricas_generales(self, stock_df):
-    """Calcula métricas generales del inventario"""
-    try:
-        if stock_df.empty:
+
+def calcular_metricas_generales(self, stock_df):
+        """Calcula métricas generales del inventario"""
+        try:
+            if stock_df.empty:
+                return {
+                    'Total Productos': 0,
+                    'Total Almacenes': 0,
+                    'Total Lotes': 0,
+                    'Total Cajas en Stock': 0,
+                    'Total Kg en Stock': 0,
+                    'Total Ventas ($)': 0,
+                    'Productos en Estado Crítico': 0,
+                    'Rotación Promedio (%)': 0
+                }
+
+            return {
+                'Total Productos': len(stock_df['Producto'].unique()),
+                'Total Almacenes': len(stock_df['Almacén'].unique()),
+                'Total Lotes': len(stock_df['Lote'].unique()),
+                'Total Cajas en Stock': stock_df['Stock'].sum(),
+                'Total Kg en Stock': stock_df['Kg Total'].sum(),
+                'Total Ventas ($)': stock_df['Ventas Total'].sum(),
+                'Productos en Estado Crítico': len(stock_df[stock_df['Estado Stock'] == 'CRÍTICO']),
+                'Rotación Promedio (%)': stock_df['Rotación'].mean()
+            }
+                
+        except Exception as e:
+            st.error(f"❌ Error en el cálculo de métricas generales: {str(e)}")
             return {
                 'Total Productos': 0,
                 'Total Almacenes': 0,
@@ -433,29 +458,6 @@ class InventarioDashboard:
                 'Rotación Promedio (%)': 0
             }
 
-        return {
-            'Total Productos': len(stock_df['Producto'].unique()),
-            'Total Almacenes': len(stock_df['Almacén'].unique()),
-            'Total Lotes': len(stock_df['Lote'].unique()),
-            'Total Cajas en Stock': stock_df['Stock'].sum(),
-            'Total Kg en Stock': stock_df['Kg Total'].sum(),
-            'Total Ventas ($)': stock_df['Ventas Total'].sum(),
-            'Productos en Estado Crítico': len(stock_df[stock_df['Estado Stock'] == 'CRÍTICO']),
-            'Rotación Promedio (%)': stock_df['Rotación'].mean()
-        }
-            
-    except Exception as e:
-        st.error(f"❌ Error en el cálculo de métricas generales: {str(e)}")
-        return {
-            'Total Productos': 0,
-            'Total Almacenes': 0,
-            'Total Lotes': 0,
-            'Total Cajas en Stock': 0,
-            'Total Kg en Stock': 0,
-            'Total Ventas ($)': 0,
-            'Productos en Estado Crítico': 0,
-            'Rotación Promedio (%)': 0
-        }
 
     def stock_view(self):
         """Vista principal del stock con diseño mejorado"""
