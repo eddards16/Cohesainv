@@ -475,7 +475,7 @@ class InventarioDashboard:
             hovermode="x unified",
             plot_bgcolor='white'
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="tree4")
 
     # -------------------------------------------------------------------------
     # (E) Vistas del Dashboard
