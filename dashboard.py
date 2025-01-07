@@ -11,6 +11,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import os
@@ -63,6 +64,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
+
 # -----------------------------------------------------------------------------
 #       1) Función externa cacheada para cargar datos desde Google Sheets
 # -----------------------------------------------------------------------------
@@ -72,6 +74,7 @@ def load_data_from_sheets(spreadsheet_id: str, range_name: str) -> pd.DataFrame:
     Carga datos desde Google Sheets y retorna un DataFrame.
     Vive fuera de la clase para evitar UnhashableParamError.
     """
+    # Revisar credenciales en st.secrets
     if "gcp_service_account" not in st.secrets:
         st.error("No se encontraron credenciales en st.secrets (gcp_service_account).")
         return pd.DataFrame()
@@ -82,9 +85,11 @@ def load_data_from_sheets(spreadsheet_id: str, range_name: str) -> pd.DataFrame:
         scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
     )
 
+    # Construir servicio de Sheets
     service = build("sheets", "v4", credentials=creds)
     sheet = service.spreadsheets()
 
+    # Leer el rango especificado
     result = sheet.values().get(
         spreadsheetId=spreadsheet_id,
         range=range_name
@@ -95,6 +100,7 @@ def load_data_from_sheets(spreadsheet_id: str, range_name: str) -> pd.DataFrame:
 
     df = pd.DataFrame(values[1:], columns=values[0])
     return df
+
 
 # -----------------------------------------------------------------------------
 #        2) Clase de utilidades: cálculos de porcentajes, formateos, etc.
@@ -121,21 +127,17 @@ class InventarioAnalytics:
         except:
             return "0"
 
+
 # -----------------------------------------------------------------------------
-#        3) Clase principal del Dashboard
+#        3) Clase principal del Dashboard con vistas: Stock, Ventas, Comercial
 # -----------------------------------------------------------------------------
 class InventarioDashboard:
     def __init__(self):
-        # IDs y rangos de la Google Sheet (Ajusta a tus valores)
+        # Ajusta tu Spreadsheet ID y Rango
         self.SPREADSHEET_ID = "1acGspGuv-i0KSA5Q8owZpFJb1ytgm1xljBLZoa2cSN8"
-        self.RANGE_CARNES = "Carnes!A1:L"
-        self.RANGE_IMPORT = "Importacion!A1:E"
+        self.RANGE_NAME = "Carnes!A1:L"   # Cambia si tienes otra hoja/rango
 
-        # DataFrames principales
-        self.df = pd.DataFrame()             # Para datos de "Carnes"
-        self.df_import = pd.DataFrame()      # Para datos de "Importación"
-        self.df_merged = pd.DataFrame()      # Para unir "Carnes" + "Importación"
-
+        self.df = pd.DataFrame()         # DataFrame principal
         self.analytics = InventarioAnalytics()
 
         # Paleta de colores
@@ -149,7 +151,7 @@ class InventarioDashboard:
             'text': '#2c3e50'
         }
 
-        # Umbrales de stock (por número de Cajas)
+        # Configuración de umbrales
         self.ESTADOS_STOCK = {
             'CRÍTICO': {'umbral': 5, 'color': '#e74c3c'},
             'BAJO': {'umbral': 20, 'color': '#f39c12'},
@@ -157,196 +159,151 @@ class InventarioDashboard:
         }
 
     # -------------------------------------------------------------------------
-    # 1) Carga de datos
+    # (A) Cargar datos invocando a la función cacheada
     # -------------------------------------------------------------------------
     def load_data(self) -> bool:
-        try:
-            with st.spinner("Cargando datos..."):
-                # Cargar datos de Carnes
-                df_carnes = load_data_from_sheets(self.SPREADSHEET_ID, self.RANGE_CARNES)
-                if df_carnes.empty:
-                    st.error("📊 No se encontraron datos en la hoja de Carnes.")
-                    return False
+        """Carga datos desde Google Sheets y hace limpieza."""
+        with st.spinner("Cargando datos..."):
+            df_tmp = load_data_from_sheets(self.SPREADSHEET_ID, self.RANGE_NAME)
+            if df_tmp.empty:
+                st.error("📊 No se encontraron datos en la hoja de cálculo.")
+                return False
 
-                # Cargar datos de Importación
-                df_imp = load_data_from_sheets(self.SPREADSHEET_ID, self.RANGE_IMPORT)
-                if df_imp.empty:
-                    st.error("📊 No se encontraron datos en la hoja de Importación.")
-                    return False
+            # Validar columnas requeridas
+            required_columns = [
+                'nombre', 'lote', 'movimiento', 'almacen',
+                'almacen actual', 'cajas', 'kg', 'precio', 'precio total'
+            ]
+            missing_cols = [c for c in required_columns if c not in df_tmp.columns]
+            if missing_cols:
+                st.error(f"❌ Faltan columnas requeridas: {missing_cols}")
+                return False
 
-                # Limpieza inicial de df_carnes
-                for col in ['cajas','kg','precio','precio total']:
-                    if col in df_carnes.columns:
-                        df_carnes[col] = pd.to_numeric(
-                            df_carnes[col].replace(['', 'E', '#VALUE!', '#N/A'], '0'),
-                            errors='coerce'
-                        ).fillna(0)
+            # Convertir columnas numéricas
+            numeric_cols = ['cajas', 'kg', 'precio', 'precio total']
+            for col in numeric_cols:
+                df_tmp[col] = pd.to_numeric(
+                    df_tmp[col].replace(['', 'E', '#VALUE!', '#N/A'], '0'),
+                    errors='coerce'
+                ).fillna(0)
 
-                for col in ['movimiento','almacen','almacen actual','nombre']:
-                    if col in df_carnes.columns:
-                        df_carnes[col] = df_carnes[col].astype(str).str.strip().fillna('')
+            # Limpiar strings
+            df_tmp['movimiento'] = df_tmp['movimiento'].str.upper().fillna('')
+            df_tmp['almacen'] = df_tmp['almacen'].str.strip().fillna('')
+            df_tmp['almacen actual'] = df_tmp['almacen actual'].str.strip().fillna('')
 
-                # Limpieza en importación: cambio de comas a punto en KG NETOS, etc.
-                if 'KG NETOS' in df_imp.columns:
-                    df_imp['KG NETOS'] = (
-                        df_imp['KG NETOS']
-                        .astype(str)
-                        .str.replace(',', '.', regex=False)
-                        .astype(float)
-                        .fillna(0)
-                    )
-                if 'CAJAS' in df_imp.columns:
-                    df_imp['CAJAS'] = pd.to_numeric(df_imp['CAJAS'], errors='coerce').fillna(0)
-
-                # Normalizar nombres para poder hacer merge
-                df_imp_ren = df_imp.copy()
-                df_imp_ren.rename(columns={'MERCADERIA': 'nombre'}, inplace=True)
-                df_imp_ren['nombre'] = df_imp_ren['nombre'].str.strip().str.upper()
-
-                df_carnes_ren = df_carnes.copy()
-                df_carnes_ren['nombre'] = df_carnes_ren['nombre'].str.strip().str.upper()
-
-                # Merge left: mantiene todas las filas de df_carnes
-                df_merged = pd.merge(
-                    df_carnes_ren,
-                    df_imp_ren[['nombre','KG NETOS','CAJAS']],
-                    how='left',
-                    on='nombre'
-                )
-
-                self.df = df_carnes
-                self.df_import = df_imp
-                self.df_merged = df_merged
-
-                st.success("✅ Datos cargados exitosamente")
-                return True
-        except Exception as e:
-            st.error(f"Error al cargar datos: {str(e)}")
-            return False
+            # Asignar a self.df
+            self.df = df_tmp
+            st.success("✅ Datos cargados exitosamente")
+            return True
 
     # -------------------------------------------------------------------------
-    # 2) Cálculo de stock actual (cajas y kg)
+    # (B) Cálculo de stock actual
     # -------------------------------------------------------------------------
     def calcular_stock_actual(self) -> pd.DataFrame:
         """
-        Calcula el stock actual (cajas y kg) por almacén-producto-lote,
-        considerando ENTRADAS, TRASPASOS y SALIDAS.
+        Retorna un DF con las columnas:
+        [Almacén, Producto, Lote, Stock, Kg Total, Entradas, Salidas, etc.]
         """
         try:
-            df = self.df_merged.copy()
-            if df.empty:
+            if self.df.empty:
                 return pd.DataFrame()
 
-            with st.spinner("Calculando stock actual..."):
+            with st.spinner('Calculando stock actual...'):
                 stock_data = []
 
-                # Unidades únicas
-                productos = df['nombre'].unique()
-                lotes = df['lote'].unique()
+                # Listas únicas
+                productos = self.df['nombre'].unique()
+                lotes = self.df['lote'].unique()
+                almacenes = pd.concat([
+                    self.df['almacen'], self.df['almacen actual']
+                ]).unique()
+                almacenes = [a for a in almacenes if pd.notna(a) and str(a).strip() != '']
 
-                # Almacenes: cualquier almacén donde haya habido movimientos
-                almacenes = pd.concat([df['almacen'], df['almacen actual']]).unique()
-                almacenes = [a for a in almacenes if str(a).strip() != '']
-
-                total_items = len(productos) * len(lotes) * len(almacenes)
+                total_items = len(productos)*len(lotes)*len(almacenes)
                 progress_bar = st.progress(0)
                 current_item = 0
 
-                # Iterar combinaciones
                 for prod in productos:
                     for lote in lotes:
                         for alm in almacenes:
                             current_item += 1
                             progress_bar.progress(current_item / total_items)
 
-                            df_fil = df[(df['nombre'] == prod) & (df['lote'] == lote)]
+                            df_fil = self.df[(self.df['nombre'] == prod) & (self.df['lote'] == lote)]
 
-                            # ENTRADAS (almacen = alm)
-                            df_ent = df_fil[(df_fil['movimiento'].str.upper() == 'ENTRADA') & (df_fil['almacen'] == alm)]
-                            entradas_cajas = df_ent['cajas'].sum()
-                            entradas_kg = df_ent['kg'].sum()
+                            # Entradas
+                            df_ent = df_fil[(df_fil['movimiento'] == 'ENTRADA') & (df_fil['almacen'] == alm)]
+                            entradas = df_ent['cajas'].sum()
+                            kg_entradas = df_ent['kg'].sum()
 
-                            # TRASPASOS RECIBIDOS (almacen actual = alm)
-                            df_t_rec = df_fil[(df_fil['movimiento'].str.upper() == 'TRASPASO') & (df_fil['almacen actual'] == alm)]
-                            tr_rec_cajas = df_t_rec['cajas'].sum()
-                            tr_rec_kg = df_t_rec['kg'].sum()
+                            # Traspasos Recibidos
+                            df_t_rec = df_fil[(df_fil['movimiento'] == 'TRASPASO') & (df_fil['almacen actual'] == alm)]
+                            tr_rec = df_t_rec['cajas'].sum()
+                            kg_t_rec = df_t_rec['kg'].sum()
 
-                            # TRASPASOS ENVIADOS (almacen = alm)
-                            df_t_env = df_fil[(df_fil['movimiento'].str.upper() == 'TRASPASO') & (df_fil['almacen'] == alm)]
-                            tr_env_cajas = df_t_env['cajas'].sum()
-                            tr_env_kg = df_t_env['kg'].sum()
+                            # Traspasos Enviados
+                            df_t_env = df_fil[(df_fil['movimiento'] == 'TRASPASO') & (df_fil['almacen'] == alm)]
+                            tr_env = df_t_env['cajas'].sum()
+                            kg_t_env = df_t_env['kg'].sum()
 
-                            # SALIDAS (almacen = alm)
-                            df_sal = df_fil[(df_fil['movimiento'].str.upper() == 'SALIDA') & (df_fil['almacen'] == alm)]
-                            salidas_cajas = df_sal['cajas'].sum()
-                            salidas_kg = df_sal['kg'].sum()
+                            # Salidas
+                            df_sal = df_fil[(df_fil['movimiento'] == 'SALIDA') & (df_fil['almacen'] == alm)]
+                            salidas = df_sal['cajas'].sum()
+                            kg_sal = df_sal['kg'].sum()
                             ventas_total = df_sal['precio total'].sum()
 
-                            # Totales en Cajas
-                            total_inicial_cajas = entradas_cajas + tr_rec_cajas
-                            stock_cajas = total_inicial_cajas - tr_env_cajas - salidas_cajas
+                            # Cálculos
+                            total_inicial = entradas + tr_rec
+                            stock = total_inicial - tr_env - salidas
+                            kg_total = kg_entradas + kg_t_rec - kg_t_env - kg_sal
 
-                            # Totales en KG
-                            total_inicial_kg = entradas_kg + tr_rec_kg
-                            stock_kg = total_inicial_kg - tr_env_kg - salidas_kg
-
-                            # Porcentajes
-                            pct_vendido = self.analytics.calcular_porcentaje(salidas_cajas, total_inicial_cajas)
-                            pct_disp = self.analytics.calcular_porcentaje(stock_cajas, total_inicial_cajas)
+                            pct_vendido = self.analytics.calcular_porcentaje(salidas, total_inicial)
+                            pct_disp = self.analytics.calcular_porcentaje(stock, total_inicial)
                             rotacion = pct_vendido
 
-                            # Estado Stock (por número de cajas)
+                            # Estado Stock
                             estado = 'NORMAL'
                             for est, config in self.ESTADOS_STOCK.items():
-                                if stock_cajas <= config['umbral']:
+                                if stock <= config['umbral']:
                                     estado = est
                                     break
 
-                            # Llenar datos si hay algo de movimiento
-                            if (total_inicial_cajas > 0) or (stock_cajas != 0):
-                                # Info de importación (KG NETOS, CAJAS)
-                                row_imp = df_fil.iloc[0]  # Toma la 1a fila del merge
-                                kg_importados = row_imp.get('KG NETOS', 0.0) or 0.0
-                                cajas_importadas = row_imp.get('CAJAS', 0.0) or 0.0
-
-                                # Diferencia: stock_kg vs kg_importados
-                                diferencia_kg = stock_kg - kg_importados
-                                pct_utilizado = self.analytics.calcular_porcentaje(stock_kg, kg_importados)
-
+                            # Guardar si hubo movimiento
+                            if total_inicial > 0 or stock != 0:
                                 stock_data.append({
                                     'Almacén': alm,
                                     'Producto': prod,
                                     'Lote': lote,
-                                    'Stock (Cajas)': stock_cajas,
-                                    'Stock (Kg)': round(stock_kg,2),
-                                    'Total Inicial (Cajas)': total_inicial_cajas,
-                                    'Entradas (Cajas)': entradas_cajas,
-                                    'Salidas (Cajas)': salidas_cajas,
-                                    'Traspasos Recibidos (Cajas)': tr_rec_cajas,
-                                    'Traspasos Enviados (Cajas)': tr_env_cajas,
+                                    'Stock': stock,
+                                    'Kg Total': kg_total,
+                                    'Total Inicial': total_inicial,
+                                    'Entradas': entradas,
+                                    'Traspasos Recibidos': tr_rec,
+                                    'Traspasos Enviados': tr_env,
+                                    'Salidas': salidas,
                                     'Ventas Total': ventas_total,
                                     '% Vendido': pct_vendido,
                                     '% Disponible': pct_disp,
                                     'Estado Stock': estado,
-                                    'Rotación': rotacion,
-                                    'KG Importados': kg_importados,
-                                    'Cajas Importadas': cajas_importadas,
-                                    'Diferencia Kg': diferencia_kg,
-                                    '% Utilizado': pct_utilizado
+                                    'Rotación': rotacion
                                 })
 
                 progress_bar.empty()
-                df_stock = pd.DataFrame(stock_data).round(2)
-                return df_stock
 
+                stock_df = pd.DataFrame(stock_data).round(2)
+                if stock_df.empty:
+                    st.warning("📊 No se encontraron datos de stock para mostrar")
+                return stock_df
         except Exception as e:
             st.error(f"❌ Error en el cálculo de stock: {str(e)}")
             return pd.DataFrame()
 
     # -------------------------------------------------------------------------
-    # 3) Métricas Generales
+    # (C) Métricas Generales
     # -------------------------------------------------------------------------
     def calcular_metricas_generales(self, stock_df: pd.DataFrame) -> dict:
+        """Calcula algunas métricas globales del DF de stock."""
         if stock_df.empty:
             return {
                 'Total Productos': 0,
@@ -363,8 +320,8 @@ class InventarioDashboard:
                 'Total Productos': len(stock_df['Producto'].unique()),
                 'Total Almacenes': len(stock_df['Almacén'].unique()),
                 'Total Lotes': len(stock_df['Lote'].unique()),
-                'Total Cajas en Stock': stock_df['Stock (Cajas)'].sum(),
-                'Total Kg en Stock': stock_df['Stock (Kg)'].sum(),
+                'Total Cajas en Stock': stock_df['Stock'].sum(),
+                'Total Kg en Stock': stock_df['Kg Total'].sum(),
                 'Total Ventas ($)': stock_df['Ventas Total'].sum(),
                 'Productos en Estado Crítico': len(stock_df[stock_df['Estado Stock'] == 'CRÍTICO']),
                 'Rotación Promedio (%)': stock_df['Rotación'].mean()
@@ -374,9 +331,7 @@ class InventarioDashboard:
             return {}
 
     def mostrar_metricas(self, metricas: dict, columnas=4):
-        """
-        Muestra métricas en tarjetas (cards) dentro de una fila con `columnas` columnas.
-        """
+        """Muestra un dict de métricas en tarjetas."""
         cols = st.columns(columnas)
         i = 0
         for titulo, valor in metricas.items():
@@ -398,9 +353,10 @@ class InventarioDashboard:
             i += 1
 
     # -------------------------------------------------------------------------
-    # 4) Generación de gráficas
+    # (D) Generación de gráficos
     # -------------------------------------------------------------------------
-    def generar_grafico_stock(self, stock_df: pd.DataFrame, tipo='barras', titulo='', key_suffix=''):
+    def generar_grafico_stock(self, stock_df: pd.DataFrame, tipo='barras', titulo=''):
+        """Genera un gráfico de stock (barras, pie, treemap)."""
         if stock_df.empty:
             return None
 
@@ -421,23 +377,21 @@ class InventarioDashboard:
             fig = px.bar(
                 stock_df,
                 x='Producto',
-                y='Stock (Cajas)',
+                y='Stock',
                 color='Estado Stock',
                 color_discrete_map={
                     'CRÍTICO': self.ESTADOS_STOCK['CRÍTICO']['color'],
                     'BAJO': self.ESTADOS_STOCK['BAJO']['color'],
                     'NORMAL': self.ESTADOS_STOCK['NORMAL']['color']
-                },
-                title=titulo or 'Stock (Cajas) por Producto'
+                }
             )
             fig.update_layout(**layout_config, xaxis_tickangle=-45, height=500, bargap=0.2)
 
         elif tipo == 'pie':
             fig = px.pie(
                 stock_df,
-                values='Stock (Cajas)',
-                names='Almacén',
-                title=titulo or 'Distribución por Almacén'
+                values='Stock',
+                names='Almacén'
             )
             fig.update_traces(textposition='inside', textinfo='percent+label', hole=0.4)
             fig.update_layout(**layout_config)
@@ -446,9 +400,8 @@ class InventarioDashboard:
             fig = px.treemap(
                 stock_df,
                 path=['Almacén', 'Producto'],
-                values='Stock (Cajas)',
+                values='Stock',
                 color='Estado Stock',
-                title=titulo or 'Distribución de Stock',
                 color_discrete_map={
                     'CRÍTICO': self.ESTADOS_STOCK['CRÍTICO']['color'],
                     'BAJO': self.ESTADOS_STOCK['BAJO']['color'],
@@ -458,50 +411,50 @@ class InventarioDashboard:
             fig.update_layout(**layout_config)
 
         else:
-            return None
+            fig = None
 
         return fig
 
-    def generar_grafico_entradas_vs_salidas(self, stock_df: pd.DataFrame, key_suffix=''):
-        """
-        Gráfico que compara la suma total de Entradas (Cajas) vs Salidas (Cajas) por producto,
-        y muestra la línea de % Vendido (cajas vendidas / total inicial).
-        """
+    def generar_grafico_entradas_vs_salidas(self, stock_df: pd.DataFrame):
+        """Genera sub-gráfico Entradas vs Salidas + % Vendido por producto."""
         if stock_df.empty:
             st.warning("No hay datos para Entradas vs. Salidas")
             return
 
         df_group = stock_df.groupby('Producto').agg({
-            'Entradas (Cajas)': 'sum',
-            'Salidas (Cajas)': 'sum',
-            'Total Inicial (Cajas)': 'sum'
+            'Entradas': 'sum',
+            'Salidas': 'sum',
+            'Total Inicial': 'sum'
         }).reset_index()
 
+        # % Vendido
         df_group['% Vendido'] = df_group.apply(
-            lambda row: self.analytics.calcular_porcentaje(row['Salidas (Cajas)'], row['Total Inicial (Cajas)']),
+            lambda row: self.analytics.calcular_porcentaje(row['Salidas'], row['Total Inicial']),
             axis=1
         )
 
         fig = make_subplots(specs=[[{"secondary_y": True}]])
-        
+        # Barras: Entradas
         fig.add_trace(
             go.Bar(
                 x=df_group['Producto'],
-                y=df_group['Entradas (Cajas)'],
-                name='Entradas (Cajas)',
+                y=df_group['Entradas'],
+                name='Entradas',
                 marker_color=self.COLOR_SCHEME['success']
             ),
             secondary_y=False
         )
+        # Barras: Salidas
         fig.add_trace(
             go.Bar(
                 x=df_group['Producto'],
-                y=df_group['Salidas (Cajas)'],
-                name='Salidas (Cajas)',
+                y=df_group['Salidas'],
+                name='Salidas',
                 marker_color=self.COLOR_SCHEME['warning']
             ),
             secondary_y=False
         )
+        # Línea: % Vendido
         fig.add_trace(
             go.Scatter(
                 x=df_group['Producto'],
@@ -514,7 +467,7 @@ class InventarioDashboard:
         )
 
         fig.update_layout(
-            title_text="Entradas vs. Salidas y % Vendido (por Cajas)",
+            title_text="Entradas vs. Salidas y % Vendido",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             xaxis=dict(title="Producto", tickangle=-45),
             yaxis=dict(title="Cajas"),
@@ -522,12 +475,13 @@ class InventarioDashboard:
             hovermode="x unified",
             plot_bgcolor='white'
         )
-        st.plotly_chart(fig, use_container_width=True, key=f"entradas_salidas_{key_suffix}")
+        st.plotly_chart(fig, use_container_width=True, key="tree4")
 
     # -------------------------------------------------------------------------
-    # 5) Vistas del Dashboard
+    # (E) Vistas del Dashboard
     # -------------------------------------------------------------------------
     def stock_view(self):
+        """Vista principal del stock."""
         st.markdown(f"<h2 style='color: {self.COLOR_SCHEME['text']}; margin-bottom: 20px;'>📊 Vista General de Stock</h2>", 
                     unsafe_allow_html=True)
 
@@ -536,6 +490,7 @@ class InventarioDashboard:
             st.warning("⚠️ No hay datos disponibles para mostrar")
             return
 
+        # Filtros
         st.markdown("### 🔍 Filtros")
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -557,7 +512,6 @@ class InventarioDashboard:
                 key="stock_estado_filter"
             )
 
-        # Aplicamos filtros
         df_filtered = stock_df.copy()
         if lote_filter:
             df_filtered = df_filtered[df_filtered['Lote'].isin(lote_filter)]
@@ -566,93 +520,82 @@ class InventarioDashboard:
         if estado_filter:
             df_filtered = df_filtered[df_filtered['Estado Stock'].isin(estado_filter)]
 
+        # Métricas
         st.markdown("### 📈 Métricas Principales")
         metricas = self.calcular_metricas_generales(df_filtered)
         self.mostrar_metricas(metricas)
 
-        # Gráficas
+        # Visualizaciones
         st.markdown("### 📊 Análisis Visual")
-        colA, colB = st.columns(2)
-        with colA:
+        col1, col2 = st.columns(2)
+        with col1:
             fig_stock = self.generar_grafico_stock(
-                df_filtered, 
-                tipo='barras', 
-                titulo='Stock (Cajas) por Producto y Estado',
-                key_suffix='stock_view_1'
+                df_filtered, tipo='barras', titulo='Stock por Producto y Estado'
             )
             if fig_stock:
                 st.plotly_chart(fig_stock, use_container_width=True)
 
-        with colB:
+        with col2:
             fig_tree = self.generar_grafico_stock(
-                df_filtered,
-                tipo='treemap',
-                titulo='Distribución de Stock',
-                key_suffix='stock_view_2'
+                df_filtered, tipo='treemap', titulo='Distribución de Stock'
             )
             if fig_tree:
-                st.plotly_chart(fig_tree, use_container_width=True)
+                st.plotly_chart(fig_tree, use_container_width=True, key="tree2")
 
+        # Tabla
         st.markdown("### 📋 Detalle de Stock")
-        columns_to_display = [
-            'Almacén','Producto','Lote',
-            'Stock (Cajas)','Stock (Kg)',
-            'KG Importados','Cajas Importadas',
-            'Diferencia Kg','% Utilizado',
-            'Estado Stock','% Disponible','Rotación'
-        ]
         st.dataframe(
-            df_filtered[columns_to_display],
+            df_filtered[[
+                'Almacén','Producto','Lote','Stock','Kg Total','Estado Stock',
+                '% Disponible','Rotación'
+            ]],
             use_container_width=True,
             height=400
         )
 
-        # Entradas vs Salidas
-        st.markdown("### 📊 Entradas vs. Salidas (Cajas)")
-        self.generar_grafico_entradas_vs_salidas(df_filtered, key_suffix='stock_view')
+        # Gráfico Entradas vs Salidas y % Vendido
+        st.markdown("### 📊 Entradas vs. Salidas y % Vendido (por Producto)")
+        self.generar_grafico_entradas_vs_salidas(df_filtered)
 
     def ventas_view(self):
+        """Vista de Ventas."""
         st.markdown(f"<h2 style='color: {self.COLOR_SCHEME['text']}; margin-bottom: 20px;'>💰 Análisis de Ventas</h2>", 
                     unsafe_allow_html=True)
 
-        # Tomamos del DF original todas las filas con movimiento = SALIDA y precio>0
-        df_ventas = self.df_merged.copy()
-        df_ventas = df_ventas[df_ventas['movimiento'].str.upper() == 'SALIDA']
-        df_ventas = df_ventas[df_ventas['precio'] > 0]
+        # Filtrar SALIDAS
+        ventas = self.df[self.df['movimiento'] == 'SALIDA'].copy()
+        ventas = ventas[ventas['precio'] > 0]
 
-        if df_ventas.empty:
+        if ventas.empty:
             st.warning("⚠️ No hay datos de ventas disponibles")
             return
 
         tabs = st.tabs(["📊 Resumen de Ventas", "👥 Análisis por Cliente", "📋 Detalle de Ventas"])
 
-        # --- TAB 1: Resumen de Ventas
         with tabs[0]:
-            total_ventas = df_ventas['precio total'].sum()
-            total_kg = df_ventas['kg'].sum()
-            total_cajas = df_ventas['cajas'].sum()
+            total_ventas = ventas['precio total'].sum()
+            total_kg = ventas['kg'].sum()
+            total_cajas = ventas['cajas'].sum()
             precio_prom = total_ventas / total_kg if total_kg else 0
 
             metricas = {
-                "Total Ventas ($)": total_ventas,
+                "Total Ventas": total_ventas,
                 "Total Kg Vendidos": total_kg,
                 "Total Cajas Vendidas": total_cajas,
                 "Precio Promedio/Kg": precio_prom
             }
             self.mostrar_metricas(metricas)
 
+            # Ventas por producto
             st.markdown("### 📈 Top Ventas por Producto")
             col1, col2 = st.columns([3,2])
             with col1:
-                ventas_prod = df_ventas.groupby(['nombre','lote']).agg({
-                    'cajas':'sum',
-                    'kg':'sum',
-                    'precio total':'sum'
+                ventas_prod = ventas.groupby(['nombre','lote']).agg({
+                    'cajas':'sum','kg':'sum','precio total':'sum'
                 }).round(2).sort_values('precio total', ascending=False)
                 ventas_prod['% del Total'] = (ventas_prod['precio total'] / total_ventas * 100).round(2)
                 ventas_prod['Precio/Kg'] = (ventas_prod['precio total'] / ventas_prod['kg']).round(2)
-                st.dataframe(ventas_prod, use_container_width=True)
-
+                st.dataframe(ventas_prod, use_container_width=True, height=400)
             with col2:
                 fig = px.pie(
                     ventas_prod.reset_index(),
@@ -664,43 +607,37 @@ class InventarioDashboard:
                 fig.update_traces(textposition='inside', textinfo='percent+label')
                 st.plotly_chart(fig, use_container_width=True)
 
-        # --- TAB 2: Análisis por Cliente
         with tabs[1]:
             st.markdown("### 👥 Análisis por Cliente")
-            total_ventas = df_ventas['precio total'].sum()
-            ventas_cliente = df_ventas.groupby('cliente').agg({
-                'cajas': 'sum',
-                'kg': 'sum',
-                'precio total': 'sum'
-            }).round(2).sort_values('precio total', ascending=False)
-            if not ventas_cliente.empty:
-                ventas_cliente['% del Total'] = (ventas_cliente['precio total'] / total_ventas * 100).round(2)
-                ventas_cliente['Precio/Kg'] = (ventas_cliente['precio total'] / ventas_cliente['kg']).round(2)
+            total_ventas = ventas['precio total'].sum()  # recalcular
 
+            ventas_cliente = ventas.groupby('cliente').agg({
+                'cajas':'sum','kg':'sum','precio total':'sum'
+            }).round(2).sort_values('precio total', ascending=False)
+            ventas_cliente['% del Total'] = (ventas_cliente['precio total'] / total_ventas * 100).round(2)
+            ventas_cliente['Precio/Kg'] = (ventas_cliente['precio total'] / ventas_cliente['kg']).round(2)
             st.dataframe(ventas_cliente, use_container_width=True)
 
             st.markdown("### 🔍 Detalle por Cliente")
-            clientes_disp = sorted(df_ventas['cliente'].dropna().unique())
             cliente_sel = st.selectbox(
                 "Seleccionar Cliente",
-                options=clientes_disp,
-                key="ventas_cliente_select"
+                options=sorted(ventas['cliente'].dropna().unique())
             )
             if cliente_sel:
-                df_cliente = df_ventas[df_ventas['cliente'] == cliente_sel]
+                df_cliente = ventas[ventas['cliente'] == cliente_sel]
                 total_cli = df_cliente['precio total'].sum()
                 kg_cli = df_cliente['kg'].sum()
 
                 metricas_cliente = {
-                    "Total Compras ($)": total_cli,
+                    "Total Compras": total_cli,
                     "Total Kg": kg_cli,
-                    "% del Total Ventas": (total_cli / total_ventas * 100) if total_ventas else 0,
-                    "Precio Promedio/Kg": (total_cli / kg_cli) if kg_cli>0 else 0
+                    "% del Total": (total_cli/total_ventas*100) if total_ventas else 0,
+                    "Precio Promedio/Kg": total_cli/kg_cli if kg_cli>0 else 0
                 }
-                self.mostrar_metricas(metricas_cliente, 2)
+                self.mostrar_metricas(metricas_cliente)
 
-                cA, cB = st.columns(2)
-                with cA:
+                col1, col2 = st.columns(2)
+                with col1:
                     fig_dist = px.pie(
                         df_cliente,
                         values='precio total',
@@ -709,55 +646,55 @@ class InventarioDashboard:
                         hole=0.4
                     )
                     st.plotly_chart(fig_dist, use_container_width=True)
-
-                with cB:
+                with col2:
                     fig_bar = px.bar(
                         df_cliente,
                         x='nombre',
                         y=['cajas','kg'],
-                        barmode='group',
-                        title=f"Cajas y Kg por Producto - {cliente_sel}"
+                        title=f"Cantidades por Producto - {cliente_sel}",
+                        barmode='group'
                     )
+                    fig_bar.update_layout(xaxis_tickangle=-45)
                     st.plotly_chart(fig_bar, use_container_width=True)
 
-        # --- TAB 3: Detalle de Ventas
         with tabs[2]:
             st.markdown("### 📋 Detalle de Ventas")
             col1, col2, col3 = st.columns(3)
             with col1:
                 cliente_filter = st.multiselect(
                     "Filtrar por Cliente",
-                    options=sorted(df_ventas['cliente'].dropna().unique()),
-                    key="ventas_cliente_filter"
+                    options=sorted(ventas['cliente'].dropna().unique())
                 )
             with col2:
                 producto_filter = st.multiselect(
                     "Filtrar por Producto",
-                    options=sorted(df_ventas['nombre'].dropna().unique()),
-                    key="ventas_producto_filter"
+                    options=sorted(ventas['nombre'].dropna().unique())
                 )
             with col3:
                 vendedor_filter = st.multiselect(
                     "Filtrar por Vendedor",
-                    options=sorted(df_ventas['vendedor'].dropna().unique()),
-                    key="ventas_vendedor_filter"
+                    options=sorted([v for v in ventas['vendedor'].dropna().unique() if str(v).strip()])
                 )
 
-            df_det = df_ventas.copy()
+            df_fil = ventas.copy()
             if cliente_filter:
-                df_det = df_det[df_det['cliente'].isin(cliente_filter)]
+                df_fil = df_fil[df_fil['cliente'].isin(cliente_filter)]
             if producto_filter:
-                df_det = df_det[df_det['nombre'].isin(producto_filter)]
+                df_fil = df_fil[df_fil['nombre'].isin(producto_filter)]
             if vendedor_filter:
-                df_det = df_det[df_det['vendedor'].isin(vendedor_filter)]
+                df_fil = df_fil[df_fil['vendedor'].isin(vendedor_filter)]
 
             st.dataframe(
-                df_det[['nombre','lote','cliente','vendedor','cajas','kg','precio','precio total']].sort_values(['cliente','nombre']),
+                df_fil[[
+                    'nombre','lote','cliente','vendedor',
+                    'cajas','kg','precio','precio total'
+                ]].sort_values(['cliente','nombre']),
                 use_container_width=True,
                 height=400
             )
 
     def vista_comercial(self):
+        """Vista Comercial (Análisis de Stock + Ventas)."""
         st.markdown(f"<h2 style='color: {self.COLOR_SCHEME['text']}; margin-bottom: 20px;'>🎯 Vista Comercial</h2>", 
                     unsafe_allow_html=True)
 
@@ -771,20 +708,17 @@ class InventarioDashboard:
         with c1:
             lote_filter = st.multiselect(
                 "Filtrar por Lote",
-                options=sorted(stock_df['Lote'].unique()),
-                key="comercial_lote_filter"
+                options=sorted(stock_df['Lote'].unique())
             )
         with c2:
             alm_filter = st.multiselect(
                 "Filtrar por Almacén",
-                options=sorted(stock_df['Almacén'].unique()),
-                key="comercial_almacen_filter"
+                options=sorted(stock_df['Almacén'].unique())
             )
         with c3:
             est_filter = st.multiselect(
                 "Filtrar por Estado",
-                options=sorted(stock_df['Estado Stock'].unique()),
-                key="comercial_estado_filter"
+                options=sorted(stock_df['Estado Stock'].unique())
             )
 
         df_f = stock_df.copy()
@@ -801,142 +735,136 @@ class InventarioDashboard:
             metricas = self.calcular_metricas_generales(df_f)
             self.mostrar_metricas(metricas)
 
-            colA, colB = st.columns(2)
-            with colA:
+            col1, col2 = st.columns(2)
+            with col1:
                 fig_stock = self.generar_grafico_stock(
-                    df_f, tipo='barras', titulo='Stock (Cajas) por Producto y Estado'
+                    df_f, tipo='barras', titulo='Stock por Producto y Estado'
                 )
                 if fig_stock:
-                    st.plotly_chart(fig_stock, use_container_width=True)
+                    st.plotly_chart(fig_stock, use_container_width=True, key="key_grafico1")
 
-            with colB:
+            with col2:
                 fig_tree = self.generar_grafico_stock(
                     df_f, tipo='treemap', titulo='Distribución de Stock'
                 )
                 if fig_tree:
-                    st.plotly_chart(fig_tree, use_container_width=True)
+                    st.plotly_chart(fig_tree, use_container_width=True, key="tree3")
 
             st.markdown("#### 📊 Entradas vs. Salidas y % Vendido (por Producto)")
-            self.generar_grafico_entradas_vs_salidas(df_f, key_suffix='comercial_view')
+            self.generar_grafico_entradas_vs_salidas(df_f)
 
         with tab2:
             st.markdown("### 🔍 Análisis Detallado por Producto")
-            prods_disp = sorted(df_f['Producto'].unique())
-            if not prods_disp:
-                st.info("No hay productos disponibles.")
-                return
             prod_sel = st.selectbox(
                 "Seleccionar Producto",
-                options=prods_disp,
-                key="comercial_producto_select"
+                options=sorted(df_f['Producto'].unique())
             )
             if prod_sel:
                 df_prod = df_f[df_f['Producto'] == prod_sel]
                 metricas_prod = {
-                    "Stock Total (Cajas)": df_prod['Stock (Cajas)'].sum(),
-                    "Kg Totales": df_prod['Stock (Kg)'].sum(),
+                    "Stock Total": df_prod['Stock'].sum(),
+                    "Kg Totales": df_prod['Kg Total'].sum(),
                     "Ventas Totales ($)": df_prod['Ventas Total'].sum(),
                     "Rotación (%)": df_prod['Rotación'].mean()
                 }
-                self.mostrar_metricas(metricas_prod, columnas=2)
+                self.mostrar_metricas(metricas_prod)
 
                 st.markdown("#### 📋 Detalle por Almacén y Lote")
                 st.dataframe(
                     df_prod[[
-                        'Almacén','Lote','Stock (Cajas)','Stock (Kg)',
-                        'Total Inicial (Cajas)','Salidas (Cajas)',
-                        '% Vendido','% Disponible','Estado Stock'
+                        'Almacén','Lote','Stock','Kg Total','Total Inicial',
+                        'Salidas','% Vendido','% Disponible','Estado Stock'
                     ]].sort_values(['Almacén','Lote']),
                     use_container_width=True
                 )
 
-                cA, cB = st.columns(2)
-                with cA:
+                c1, c2 = st.columns(2)
+                with c1:
                     fig_pie = px.pie(
                         df_prod,
-                        values='Stock (Cajas)',
+                        values='Stock',
                         names='Almacén',
                         title=f"Distribución por Almacén - {prod_sel}",
                         hole=0.4
                     )
                     st.plotly_chart(fig_pie, use_container_width=True)
-                
-                with cB:
+                with c2:
                     fig_bar = px.bar(
                         df_prod,
                         x='Lote',
-                        y=['Stock (Cajas)','Salidas (Cajas)'],
-                        title=f"Stock vs Salidas (Cajas) - {prod_sel}",
+                        y=['Stock','Salidas'],
+                        title=f"Stock vs Salidas - {prod_sel}",
                         barmode='group'
                     )
                     st.plotly_chart(fig_bar, use_container_width=True)
 
         with tab3:
             st.markdown("### 📍 Análisis Detallado por Almacén")
-            almacenes_disp = sorted(df_f['Almacén'].unique())
-            if not almacenes_disp:
-                st.info("No hay almacenes disponibles.")
-                return
             alm_sel = st.selectbox(
                 "Seleccionar Almacén",
-                options=almacenes_disp,
-                key="comercial_almacen_select"
+                options=sorted(df_f['Almacén'].unique())
             )
             if alm_sel:
                 df_alm = df_f[df_f['Almacén'] == alm_sel]
                 metricas_alm = {
                     "Total Productos": len(df_alm['Producto'].unique()),
-                    "Stock Total (Cajas)": df_alm['Stock (Cajas)'].sum(),
+                    "Stock Total": df_alm['Stock'].sum(),
                     "Productos Críticos": len(df_alm[df_alm['Estado Stock'] == 'CRÍTICO'])
                 }
                 self.mostrar_metricas(metricas_alm, 3)
 
                 st.markdown("#### 📊 Estado de Stock por Producto")
                 resumen_stock = df_alm.groupby('Producto').agg({
-                    'Stock (Cajas)': 'sum',
-                    'Stock (Kg)': 'sum',
-                    'Total Inicial (Cajas)': 'sum',
-                    'Salidas (Cajas)': 'sum',
+                    'Stock': 'sum',
+                    'Kg Total': 'sum',
+                    'Total Inicial': 'sum',
+                    'Salidas': 'sum',
                     '% Vendido': 'mean',
                     '% Disponible': 'mean'
-                }).reset_index().round(2)
+                }).round(2).reset_index()
 
+                # Determinar estado para cada producto
                 def definir_estado(stock_val):
                     for est, cfg in self.ESTADOS_STOCK.items():
                         if stock_val <= cfg['umbral']:
                             return est
                     return 'NORMAL'
 
-                resumen_stock['Estado'] = resumen_stock['Stock (Cajas)'].apply(definir_estado)
+                resumen_stock['Estado'] = resumen_stock['Stock'].apply(definir_estado)
 
-                st.dataframe(resumen_stock, use_container_width=True)
+                st.dataframe(
+                    resumen_stock.sort_values('Stock', ascending=False),
+                    use_container_width=True
+                )
 
-                cA, cB = st.columns(2)
-                with cA:
+                c1, c2 = st.columns(2)
+                with c1:
                     fig_stock_alm = px.bar(
                         df_alm,
                         x='Producto',
-                        y='Stock (Cajas)',
+                        y='Stock',
                         color='Estado Stock',
-                        title=f"Stock (Cajas) por Producto - {alm_sel}"
+                        title=f"Stock por Producto - {alm_sel}"
                     )
                     fig_stock_alm.update_layout(xaxis_tickangle=-45)
                     st.plotly_chart(fig_stock_alm, use_container_width=True)
-
-                with cB:
+                
+                with c2:
                     fig_estados = px.pie(
                         df_alm,
                         names='Estado Stock',
-                        values='Stock (Cajas)',
+                        values='Stock',
                         title=f"Distribución por Estado - {alm_sel}",
                         hole=0.4
                     )
                     st.plotly_chart(fig_estados, use_container_width=True)
 
+
     # -------------------------------------------------------------------------
-    # 6) Ejecución del Dashboard
+    # (F) Método principal: run_dashboard()
     # -------------------------------------------------------------------------
     def run_dashboard(self):
+        """Ejecución principal del Dashboard."""
         st.markdown(f"""
             <h1 style='text-align: center; color: {self.COLOR_SCHEME['primary']}; padding: 1rem 0;'>
                 📦 Dashboard de Inventario COHESA
@@ -965,6 +893,7 @@ class InventarioDashboard:
 
         with tab3:
             self.vista_comercial()
+
 
 # -----------------------------------------------------------------------------
 #                   4) Punto de entrada: Ejecutar el Dashboard
