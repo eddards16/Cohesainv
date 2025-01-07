@@ -148,27 +148,36 @@ class InventarioDashboard:
             'NORMAL': {'umbral': float('inf'), 'color': '#2ecc71'}
         }
 
-    def normalizar_entradas(self):
-        """Normaliza las entradas iniciales según el packing list"""
-        if self.df_importacion.empty or self.df.empty:
-            return pd.DataFrame()
+def normalizar_entradas(self):
+    """Normaliza las entradas iniciales según el packing list"""
+    if self.df_importacion.empty or self.df.empty:
+        return pd.DataFrame()
 
-        # Filtrar solo las entradas iniciales
-        entradas = self.df[
-            (self.df['movimiento'] == 'ENTRADA') & 
-            (self.df['lote'] == 'L0001')
-        ].copy()
+    # Filtrar solo las entradas iniciales
+    entradas = self.df[
+        (self.df['movimiento'] == 'ENTRADA') & 
+        (self.df['lote'] == 'L0001')
+    ].copy()
+    
+    # Crear diccionario de totales desde importación
+    try:
+        # Asegurarse de que las columnas sean numéricas
+        self.df_importacion['KG NETOS'] = self.df_importacion['KG NETOS'].apply(
+            lambda x: float(str(x).replace(',', '.'))
+        )
+        self.df_importacion['CAJAS'] = pd.to_numeric(
+            self.df_importacion['CAJAS'], errors='coerce'
+        ).fillna(0)
         
-        # Crear diccionario de totales desde importación
         totales_importacion = self.df_importacion.set_index('MERCADERIA').to_dict()
         
         # Calcular proporción para cada producto
         for idx, row in entradas.iterrows():
             producto = row['nombre'].strip()
             if producto in totales_importacion['KG NETOS']:
-                kg_total = float(str(totales_importacion['KG NETOS'][producto]).replace(',', '.'))
-                cajas_total = totales_importacion['CAJAS'][producto]
-                cajas_entrada = row['cajas']
+                kg_total = totales_importacion['KG NETOS'][producto]
+                cajas_total = int(totales_importacion['CAJAS'][producto])
+                cajas_entrada = int(row['cajas'])
                 
                 # Calcular kg proporcionales
                 if cajas_total > 0:
@@ -176,6 +185,10 @@ class InventarioDashboard:
                     entradas.loc[idx, 'kg'] = kg_proporcion
         
         return entradas
+    
+    except Exception as e:
+        st.error(f"Error al normalizar entradas: {str(e)}")
+        return pd.DataFrame()
 
     def actualizar_entradas_principales(self, entradas_normalizadas):
         """Actualiza las entradas en el DataFrame principal"""
