@@ -11,7 +11,6 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import os
@@ -64,7 +63,6 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-
 # -----------------------------------------------------------------------------
 #       1) Función externa cacheada para cargar datos desde Google Sheets
 # -----------------------------------------------------------------------------
@@ -74,7 +72,6 @@ def load_data_from_sheets(spreadsheet_id: str, range_name: str) -> pd.DataFrame:
     Carga datos desde Google Sheets y retorna un DataFrame.
     Vive fuera de la clase para evitar UnhashableParamError.
     """
-    # Revisar credenciales en st.secrets
     if "gcp_service_account" not in st.secrets:
         st.error("No se encontraron credenciales en st.secrets (gcp_service_account).")
         return pd.DataFrame()
@@ -85,11 +82,9 @@ def load_data_from_sheets(spreadsheet_id: str, range_name: str) -> pd.DataFrame:
         scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
     )
 
-    # Construir servicio de Sheets
     service = build("sheets", "v4", credentials=creds)
     sheet = service.spreadsheets()
 
-    # Leer el rango especificado
     result = sheet.values().get(
         spreadsheetId=spreadsheet_id,
         range=range_name
@@ -100,7 +95,6 @@ def load_data_from_sheets(spreadsheet_id: str, range_name: str) -> pd.DataFrame:
 
     df = pd.DataFrame(values[1:], columns=values[0])
     return df
-
 
 # -----------------------------------------------------------------------------
 #        2) Clase de utilidades: cálculos de porcentajes, formateos, etc.
@@ -127,20 +121,16 @@ class InventarioAnalytics:
         except:
             return "0"
 
-
 # -----------------------------------------------------------------------------
-#        3) Clase principal del Dashboard con vistas: Stock, Ventas, Comercial
+#        3) Clase principal del Dashboard
 # -----------------------------------------------------------------------------
 class InventarioDashboard:
     def __init__(self):
-        # Ajusta tu Spreadsheet ID y Rango
         self.SPREADSHEET_ID = "1acGspGuv-i0KSA5Q8owZpFJb1ytgm1xljBLZoa2cSN8"
-        self.RANGE_NAME = "Carnes!A1:L"   # Cambia si tienes otra hoja/rango
-
-        self.df = pd.DataFrame()         # DataFrame principal
+        self.RANGE_NAME = "Carnes!A1:L"
+        self.df = pd.DataFrame()
         self.analytics = InventarioAnalytics()
 
-        # Paleta de colores
         self.COLOR_SCHEME = {
             'primary': '#1f77b4',
             'secondary': '#ff7f0e',
@@ -151,25 +141,19 @@ class InventarioDashboard:
             'text': '#2c3e50'
         }
 
-        # Configuración de umbrales
         self.ESTADOS_STOCK = {
             'CRÍTICO': {'umbral': 5, 'color': '#e74c3c'},
             'BAJO': {'umbral': 20, 'color': '#f39c12'},
             'NORMAL': {'umbral': float('inf'), 'color': '#2ecc71'}
         }
 
-    # -------------------------------------------------------------------------
-    # (A) Cargar datos invocando a la función cacheada
-    # -------------------------------------------------------------------------
     def load_data(self) -> bool:
-        """Carga datos desde Google Sheets y hace limpieza."""
         with st.spinner("Cargando datos..."):
             df_tmp = load_data_from_sheets(self.SPREADSHEET_ID, self.RANGE_NAME)
             if df_tmp.empty:
                 st.error("📊 No se encontraron datos en la hoja de cálculo.")
                 return False
 
-            # Validar columnas requeridas
             required_columns = [
                 'nombre', 'lote', 'movimiento', 'almacen',
                 'almacen actual', 'cajas', 'kg', 'precio', 'precio total'
@@ -179,7 +163,6 @@ class InventarioDashboard:
                 st.error(f"❌ Faltan columnas requeridas: {missing_cols}")
                 return False
 
-            # Convertir columnas numéricas
             numeric_cols = ['cajas', 'kg', 'precio', 'precio total']
             for col in numeric_cols:
                 df_tmp[col] = pd.to_numeric(
@@ -187,24 +170,14 @@ class InventarioDashboard:
                     errors='coerce'
                 ).fillna(0)
 
-            # Limpiar strings
             df_tmp['movimiento'] = df_tmp['movimiento'].str.upper().fillna('')
             df_tmp['almacen'] = df_tmp['almacen'].str.strip().fillna('')
             df_tmp['almacen actual'] = df_tmp['almacen actual'].str.strip().fillna('')
 
-            # Asignar a self.df
             self.df = df_tmp
             st.success("✅ Datos cargados exitosamente")
             return True
-
-    # -------------------------------------------------------------------------
-    # (B) Cálculo de stock actual
-    # -------------------------------------------------------------------------
     def calcular_stock_actual(self) -> pd.DataFrame:
-        """
-        Retorna un DF con las columnas:
-        [Almacén, Producto, Lote, Stock, Kg Total, Entradas, Salidas, etc.]
-        """
         try:
             if self.df.empty:
                 return pd.DataFrame()
@@ -212,7 +185,6 @@ class InventarioDashboard:
             with st.spinner('Calculando stock actual...'):
                 stock_data = []
 
-                # Listas únicas
                 productos = self.df['nombre'].unique()
                 lotes = self.df['lote'].unique()
                 almacenes = pd.concat([
@@ -232,28 +204,23 @@ class InventarioDashboard:
 
                             df_fil = self.df[(self.df['nombre'] == prod) & (self.df['lote'] == lote)]
 
-                            # Entradas
                             df_ent = df_fil[(df_fil['movimiento'] == 'ENTRADA') & (df_fil['almacen'] == alm)]
                             entradas = df_ent['cajas'].sum()
                             kg_entradas = df_ent['kg'].sum()
 
-                            # Traspasos Recibidos
                             df_t_rec = df_fil[(df_fil['movimiento'] == 'TRASPASO') & (df_fil['almacen actual'] == alm)]
                             tr_rec = df_t_rec['cajas'].sum()
                             kg_t_rec = df_t_rec['kg'].sum()
 
-                            # Traspasos Enviados
                             df_t_env = df_fil[(df_fil['movimiento'] == 'TRASPASO') & (df_fil['almacen'] == alm)]
                             tr_env = df_t_env['cajas'].sum()
                             kg_t_env = df_t_env['kg'].sum()
 
-                            # Salidas
                             df_sal = df_fil[(df_fil['movimiento'] == 'SALIDA') & (df_fil['almacen'] == alm)]
                             salidas = df_sal['cajas'].sum()
                             kg_sal = df_sal['kg'].sum()
                             ventas_total = df_sal['precio total'].sum()
 
-                            # Cálculos
                             total_inicial = entradas + tr_rec
                             stock = total_inicial - tr_env - salidas
                             kg_total = kg_entradas + kg_t_rec - kg_t_env - kg_sal
@@ -262,14 +229,12 @@ class InventarioDashboard:
                             pct_disp = self.analytics.calcular_porcentaje(stock, total_inicial)
                             rotacion = pct_vendido
 
-                            # Estado Stock
                             estado = 'NORMAL'
                             for est, config in self.ESTADOS_STOCK.items():
                                 if stock <= config['umbral']:
                                     estado = est
                                     break
 
-                            # Guardar si hubo movimiento
                             if total_inicial > 0 or stock != 0:
                                 stock_data.append({
                                     'Almacén': alm,
@@ -299,11 +264,7 @@ class InventarioDashboard:
             st.error(f"❌ Error en el cálculo de stock: {str(e)}")
             return pd.DataFrame()
 
-    # -------------------------------------------------------------------------
-    # (C) Métricas Generales
-    # -------------------------------------------------------------------------
     def calcular_metricas_generales(self, stock_df: pd.DataFrame) -> dict:
-        """Calcula algunas métricas globales del DF de stock."""
         if stock_df.empty:
             return {
                 'Total Productos': 0,
@@ -331,7 +292,6 @@ class InventarioDashboard:
             return {}
 
     def mostrar_metricas(self, metricas: dict, columnas=4):
-        """Muestra un dict de métricas en tarjetas."""
         cols = st.columns(columnas)
         i = 0
         for titulo, valor in metricas.items():
@@ -351,12 +311,7 @@ class InventarioDashboard:
                     </div>
                     """, unsafe_allow_html=True)
             i += 1
-
-    # -------------------------------------------------------------------------
-    # (D) Generación de gráficos
-    # -------------------------------------------------------------------------
-    def generar_grafico_stock(self, stock_df: pd.DataFrame, tipo='barras', titulo=''):
-        """Genera un gráfico de stock (barras, pie, treemap)."""
+    def generar_grafico_stock(self, stock_df: pd.DataFrame, tipo='barras', titulo='', key_suffix=''):
         if stock_df.empty:
             return None
 
@@ -411,12 +366,11 @@ class InventarioDashboard:
             fig.update_layout(**layout_config)
 
         else:
-            fig = None
+            return None
 
         return fig
 
-    def generar_grafico_entradas_vs_salidas(self, stock_df: pd.DataFrame):
-        """Genera sub-gráfico Entradas vs Salidas + % Vendido por producto."""
+    def generar_grafico_entradas_vs_salidas(self, stock_df: pd.DataFrame, key_suffix=''):
         if stock_df.empty:
             st.warning("No hay datos para Entradas vs. Salidas")
             return
@@ -427,14 +381,12 @@ class InventarioDashboard:
             'Total Inicial': 'sum'
         }).reset_index()
 
-        # % Vendido
         df_group['% Vendido'] = df_group.apply(
             lambda row: self.analytics.calcular_porcentaje(row['Salidas'], row['Total Inicial']),
             axis=1
         )
 
         fig = make_subplots(specs=[[{"secondary_y": True}]])
-        # Barras: Entradas
         fig.add_trace(
             go.Bar(
                 x=df_group['Producto'],
@@ -444,7 +396,6 @@ class InventarioDashboard:
             ),
             secondary_y=False
         )
-        # Barras: Salidas
         fig.add_trace(
             go.Bar(
                 x=df_group['Producto'],
@@ -454,7 +405,6 @@ class InventarioDashboard:
             ),
             secondary_y=False
         )
-        # Línea: % Vendido
         fig.add_trace(
             go.Scatter(
                 x=df_group['Producto'],
@@ -475,13 +425,9 @@ class InventarioDashboard:
             hovermode="x unified",
             plot_bgcolor='white'
         )
-        st.plotly_chart(fig, use_container_width=True, key="tree4")
+        st.plotly_chart(fig, use_container_width=True, key=f"entradas_salidas_{key_suffix}")
 
-    # -------------------------------------------------------------------------
-    # (E) Vistas del Dashboard
-    # -------------------------------------------------------------------------
     def stock_view(self):
-        """Vista principal del stock."""
         st.markdown(f"<h2 style='color: {self.COLOR_SCHEME['text']}; margin-bottom: 20px;'>📊 Vista General de Stock</h2>", 
                     unsafe_allow_html=True)
 
@@ -490,7 +436,6 @@ class InventarioDashboard:
             st.warning("⚠️ No hay datos disponibles para mostrar")
             return
 
-        # Filtros
         st.markdown("### 🔍 Filtros")
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -520,29 +465,28 @@ class InventarioDashboard:
         if estado_filter:
             df_filtered = df_filtered[df_filtered['Estado Stock'].isin(estado_filter)]
 
-        # Métricas
         st.markdown("### 📈 Métricas Principales")
         metricas = self.calcular_metricas_generales(df_filtered)
         self.mostrar_metricas(metricas)
 
-        # Visualizaciones
         st.markdown("### 📊 Análisis Visual")
         col1, col2 = st.columns(2)
         with col1:
             fig_stock = self.generar_grafico_stock(
-                df_filtered, tipo='barras', titulo='Stock por Producto y Estado'
+                df_filtered, tipo='barras', titulo='Stock por Producto y Estado',
+                key_suffix='stock_view_1'
             )
             if fig_stock:
-                st.plotly_chart(fig_stock, use_container_width=True)
+                st.plotly_chart(fig_stock, use_container_width=True, key="stock_bar_1")
 
         with col2:
             fig_tree = self.generar_grafico_stock(
-                df_filtered, tipo='treemap', titulo='Distribución de Stock'
+                df_filtered, tipo='treemap', titulo='Distribución de Stock',
+                key_suffix='stock_view_2'
             )
             if fig_tree:
-                st.plotly_chart(fig_tree, use_container_width=True, key="tree2")
+                st.plotly_chart(fig_tree, use_container_width=True, key="stock_tree_1")
 
-        # Tabla
         st.markdown("### 📋 Detalle de Stock")
         st.dataframe(
             df_filtered[[
@@ -553,16 +497,12 @@ class InventarioDashboard:
             height=400
         )
 
-        # Gráfico Entradas vs Salidas y % Vendido
         st.markdown("### 📊 Entradas vs. Salidas y % Vendido (por Producto)")
-        self.generar_grafico_entradas_vs_salidas(df_filtered)
-
+        self.generar_grafico_entradas_vs_salidas(df_filtered, key_suffix='stock_view')
     def ventas_view(self):
-        """Vista de Ventas."""
         st.markdown(f"<h2 style='color: {self.COLOR_SCHEME['text']}; margin-bottom: 20px;'>💰 Análisis de Ventas</h2>", 
                     unsafe_allow_html=True)
 
-        # Filtrar SALIDAS
         ventas = self.df[self.df['movimiento'] == 'SALIDA'].copy()
         ventas = ventas[ventas['precio'] > 0]
 
@@ -586,7 +526,6 @@ class InventarioDashboard:
             }
             self.mostrar_metricas(metricas)
 
-            # Ventas por producto
             st.markdown("### 📈 Top Ventas por Producto")
             col1, col2 = st.columns([3,2])
             with col1:
@@ -605,12 +544,10 @@ class InventarioDashboard:
                     hole=0.4
                 )
                 fig.update_traces(textposition='inside', textinfo='percent+label')
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="ventas_pie_1")
 
         with tabs[1]:
             st.markdown("### 👥 Análisis por Cliente")
-            total_ventas = ventas['precio total'].sum()  # recalcular
-
             ventas_cliente = ventas.groupby('cliente').agg({
                 'cajas':'sum','kg':'sum','precio total':'sum'
             }).round(2).sort_values('precio total', ascending=False)
@@ -621,7 +558,8 @@ class InventarioDashboard:
             st.markdown("### 🔍 Detalle por Cliente")
             cliente_sel = st.selectbox(
                 "Seleccionar Cliente",
-                options=sorted(ventas['cliente'].dropna().unique())
+                options=sorted(ventas['cliente'].dropna().unique()),
+                key="ventas_cliente_select"
             )
             if cliente_sel:
                 df_cliente = ventas[ventas['cliente'] == cliente_sel]
@@ -645,7 +583,7 @@ class InventarioDashboard:
                         title=f"Distribución de Compras - {cliente_sel}",
                         hole=0.4
                     )
-                    st.plotly_chart(fig_dist, use_container_width=True)
+                    st.plotly_chart(fig_dist, use_container_width=True, key=f"cliente_pie_{cliente_sel}")
                 with col2:
                     fig_bar = px.bar(
                         df_cliente,
@@ -655,7 +593,7 @@ class InventarioDashboard:
                         barmode='group'
                     )
                     fig_bar.update_layout(xaxis_tickangle=-45)
-                    st.plotly_chart(fig_bar, use_container_width=True)
+                    st.plotly_chart(fig_bar, use_container_width=True, key=f"cliente_bar_{cliente_sel}")
 
         with tabs[2]:
             st.markdown("### 📋 Detalle de Ventas")
@@ -663,17 +601,20 @@ class InventarioDashboard:
             with col1:
                 cliente_filter = st.multiselect(
                     "Filtrar por Cliente",
-                    options=sorted(ventas['cliente'].dropna().unique())
+                    options=sorted(ventas['cliente'].dropna().unique()),
+                    key="ventas_cliente_filter"
                 )
             with col2:
                 producto_filter = st.multiselect(
                     "Filtrar por Producto",
-                    options=sorted(ventas['nombre'].dropna().unique())
+                    options=sorted(ventas['nombre'].dropna().unique()),
+                    key="ventas_producto_filter"
                 )
             with col3:
                 vendedor_filter = st.multiselect(
                     "Filtrar por Vendedor",
-                    options=sorted([v for v in ventas['vendedor'].dropna().unique() if str(v).strip()])
+                    options=sorted([v for v in ventas['vendedor'].dropna().unique() if str(v).strip()]),
+                    key="ventas_vendedor_filter"
                 )
 
             df_fil = ventas.copy()
@@ -694,7 +635,6 @@ class InventarioDashboard:
             )
 
     def vista_comercial(self):
-        """Vista Comercial (Análisis de Stock + Ventas)."""
         st.markdown(f"<h2 style='color: {self.COLOR_SCHEME['text']}; margin-bottom: 20px;'>🎯 Vista Comercial</h2>", 
                     unsafe_allow_html=True)
 
@@ -708,17 +648,20 @@ class InventarioDashboard:
         with c1:
             lote_filter = st.multiselect(
                 "Filtrar por Lote",
-                options=sorted(stock_df['Lote'].unique())
+                options=sorted(stock_df['Lote'].unique()),
+                key="comercial_lote_filter"
             )
         with c2:
             alm_filter = st.multiselect(
                 "Filtrar por Almacén",
-                options=sorted(stock_df['Almacén'].unique())
+                options=sorted(stock_df['Almacén'].unique()),
+                key="comercial_almacen_filter"
             )
         with c3:
             est_filter = st.multiselect(
                 "Filtrar por Estado",
-                options=sorted(stock_df['Estado Stock'].unique())
+                options=sorted(stock_df['Estado Stock'].unique()),
+                key="comercial_estado_filter"
             )
 
         df_f = stock_df.copy()
@@ -741,23 +684,24 @@ class InventarioDashboard:
                     df_f, tipo='barras', titulo='Stock por Producto y Estado'
                 )
                 if fig_stock:
-                    st.plotly_chart(fig_stock, use_container_width=True, key="key_grafico1")
+                    st.plotly_chart(fig_stock, use_container_width=True, key="comercial_bar_1")
 
             with col2:
                 fig_tree = self.generar_grafico_stock(
                     df_f, tipo='treemap', titulo='Distribución de Stock'
                 )
                 if fig_tree:
-                    st.plotly_chart(fig_tree, use_container_width=True, key="tree3")
+                    st.plotly_chart(fig_tree, use_container_width=True, key="comercial_tree_1")
 
             st.markdown("#### 📊 Entradas vs. Salidas y % Vendido (por Producto)")
-            self.generar_grafico_entradas_vs_salidas(df_f)
+            self.generar_grafico_entradas_vs_salidas(df_f, key_suffix='comercial_view')
 
         with tab2:
             st.markdown("### 🔍 Análisis Detallado por Producto")
             prod_sel = st.selectbox(
                 "Seleccionar Producto",
-                options=sorted(df_f['Producto'].unique())
+                options=sorted(df_f['Producto'].unique()),
+                key="comercial_producto_select"
             )
             if prod_sel:
                 df_prod = df_f[df_f['Producto'] == prod_sel]
@@ -787,7 +731,7 @@ class InventarioDashboard:
                         title=f"Distribución por Almacén - {prod_sel}",
                         hole=0.4
                     )
-                    st.plotly_chart(fig_pie, use_container_width=True)
+                    st.plotly_chart(fig_pie, use_container_width=True, key=f"comercial_prod_pie_{prod_sel}")
                 with c2:
                     fig_bar = px.bar(
                         df_prod,
@@ -796,13 +740,14 @@ class InventarioDashboard:
                         title=f"Stock vs Salidas - {prod_sel}",
                         barmode='group'
                     )
-                    st.plotly_chart(fig_bar, use_container_width=True)
+                    st.plotly_chart(fig_bar, use_container_width=True, key=f"comercial_prod_bar_{prod_sel}")
 
         with tab3:
             st.markdown("### 📍 Análisis Detallado por Almacén")
             alm_sel = st.selectbox(
                 "Seleccionar Almacén",
-                options=sorted(df_f['Almacén'].unique())
+                options=sorted(df_f['Almacén'].unique()),
+                key="comercial_almacen_select"
             )
             if alm_sel:
                 df_alm = df_f[df_f['Almacén'] == alm_sel]
@@ -823,7 +768,6 @@ class InventarioDashboard:
                     '% Disponible': 'mean'
                 }).round(2).reset_index()
 
-                # Determinar estado para cada producto
                 def definir_estado(stock_val):
                     for est, cfg in self.ESTADOS_STOCK.items():
                         if stock_val <= cfg['umbral']:
@@ -847,7 +791,7 @@ class InventarioDashboard:
                         title=f"Stock por Producto - {alm_sel}"
                     )
                     fig_stock_alm.update_layout(xaxis_tickangle=-45)
-                    st.plotly_chart(fig_stock_alm, use_container_width=True)
+                    st.plotly_chart(fig_stock_alm, use_container_width=True, key=f"comercial_alm_bar_{alm_sel}")
                 
                 with c2:
                     fig_estados = px.pie(
@@ -857,14 +801,9 @@ class InventarioDashboard:
                         title=f"Distribución por Estado - {alm_sel}",
                         hole=0.4
                     )
-                    st.plotly_chart(fig_estados, use_container_width=True)
+                    st.plotly_chart(fig_estados, use_container_width=True, key=f"comercial_alm_pie_{alm_sel}")
 
-
-    # -------------------------------------------------------------------------
-    # (F) Método principal: run_dashboard()
-    # -------------------------------------------------------------------------
     def run_dashboard(self):
-        """Ejecución principal del Dashboard."""
         st.markdown(f"""
             <h1 style='text-align: center; color: {self.COLOR_SCHEME['primary']}; padding: 1rem 0;'>
                 📦 Dashboard de Inventario COHESA
