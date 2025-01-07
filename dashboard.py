@@ -132,6 +132,7 @@ class InventarioDashboard:
         self.df = pd.DataFrame()
         self.df_importacion = pd.DataFrame()
         self.analytics = InventarioAnalytics()
+        
         self.COLOR_SCHEME = {
             'primary': '#1f77b4',
             'secondary': '#ff7f0e',
@@ -148,96 +149,92 @@ class InventarioDashboard:
             'NORMAL': {'umbral': float('inf'), 'color': '#2ecc71'}
         }
 
-def normalizar_entradas(self):
-    """Normaliza las entradas iniciales según el packing list"""
-    if self.df_importacion.empty or self.df.empty:
-        return pd.DataFrame()
-
-    # Filtrar solo las entradas iniciales
-    entradas = self.df[
-        (self.df['movimiento'] == 'ENTRADA') & 
-        (self.df['lote'] == 'L0001')
-    ].copy()
-    
-    # Crear diccionario de totales desde importación
-    try:
-        # Asegurarse de que las columnas sean numéricas
-        self.df_importacion['KG NETOS'] = self.df_importacion['KG NETOS'].apply(
-            lambda x: float(str(x).replace(',', '.'))
-        )
-        self.df_importacion['CAJAS'] = pd.to_numeric(
-            self.df_importacion['CAJAS'], errors='coerce'
-        ).fillna(0)
-        
-        totales_importacion = self.df_importacion.set_index('MERCADERIA').to_dict()
-        
-        # Calcular proporción para cada producto
-        for idx, row in entradas.iterrows():
-            producto = row['nombre'].strip()
-            if producto in totales_importacion['KG NETOS']:
-                kg_total = totales_importacion['KG NETOS'][producto]
-                cajas_total = int(totales_importacion['CAJAS'][producto])
-                cajas_entrada = int(row['cajas'])
-                
-                # Calcular kg proporcionales
-                if cajas_total > 0:
-                    kg_proporcion = (kg_total / cajas_total) * cajas_entrada
-                    entradas.loc[idx, 'kg'] = kg_proporcion
-        
-        return entradas
-    
-    except Exception as e:
-        st.error(f"Error al normalizar entradas: {str(e)}")
-        return pd.DataFrame()
-
-    def actualizar_entradas_principales(self, entradas_normalizadas):
-        """Actualiza las entradas en el DataFrame principal"""
-        if entradas_normalizadas.empty:
-            return self.df
-
-        # Crear máscara para las entradas iniciales
-        mask = (self.df['movimiento'] == 'ENTRADA') & (self.df['lote'] == 'L0001')
-        
-        # Actualizar kg en las entradas
-        self.df.loc[mask, 'kg'] = entradas_normalizadas['kg']
-        
-        return self.df
-
     def load_data(self) -> bool:
         """Carga los datos desde Google Sheets"""
-        with st.spinner("Cargando datos..."):
-            # Cargar datos de carnes
-            self.df = load_data_from_sheets(self.SPREADSHEET_ID, self.RANGE_NAME_CARNES)
-            if self.df.empty:
-                st.error("📊 No se encontraron datos en la hoja de carnes.")
-                return False
+        try:
+            with st.spinner("Cargando datos..."):
+                # Cargar datos de carnes
+                df_carnes = load_data_from_sheets(self.SPREADSHEET_ID, self.RANGE_NAME_CARNES)
+                if df_carnes.empty:
+                    st.error("📊 No se encontraron datos en la hoja de carnes.")
+                    return False
+                self.df = df_carnes
 
-            # Cargar datos de importación
-            self.df_importacion = load_data_from_sheets(self.SPREADSHEET_ID, self.RANGE_NAME_IMPORTACION)
-            if self.df_importacion.empty:
-                st.error("📊 No se encontraron datos en la hoja de importación.")
-                return False
+                # Cargar datos de importación
+                df_imp = load_data_from_sheets(self.SPREADSHEET_ID, self.RANGE_NAME_IMPORTACION)
+                if df_imp.empty:
+                    st.error("📊 No se encontraron datos en la hoja de importación.")
+                    return False
+                self.df_importacion = df_imp
 
-            # Normalizar columnas numéricas
-            numeric_cols = ['cajas', 'kg', 'precio', 'precio total']
-            for col in numeric_cols:
-                self.df[col] = pd.to_numeric(
-                    self.df[col].replace(['', 'E', '#VALUE!', '#N/A'], '0'),
+                # Normalizar columnas numéricas en df
+                numeric_cols = ['cajas', 'kg', 'precio', 'precio total']
+                for col in numeric_cols:
+                    self.df[col] = pd.to_numeric(
+                        self.df[col].replace(['', 'E', '#VALUE!', '#N/A'], '0'),
+                        errors='coerce'
+                    ).fillna(0)
+
+                # Normalizar columnas en df_importacion
+                self.df_importacion['KG NETOS'] = self.df_importacion['KG NETOS'].apply(
+                    lambda x: float(str(x).replace(',', '.'))
+                )
+                self.df_importacion['CAJAS'] = pd.to_numeric(
+                    self.df_importacion['CAJAS'], 
                     errors='coerce'
                 ).fillna(0)
 
-            # Normalizar entradas según importación
-            entradas_normalizadas = self.normalizar_entradas()
-            if not entradas_normalizadas.empty:
-                self.df = self.actualizar_entradas_principales(entradas_normalizadas)
+                # Normalizar entradas según importación
+                entradas_normalizadas = self.normalizar_entradas()
+                if not entradas_normalizadas.empty:
+                    self.df = self.actualizar_entradas_principales(entradas_normalizadas)
 
-            # Limpieza adicional de datos
-            self.df['movimiento'] = self.df['movimiento'].str.upper().fillna('')
-            self.df['almacen'] = self.df['almacen'].str.strip().fillna('')
-            self.df['almacen actual'] = self.df['almacen actual'].str.strip().fillna('')
+                # Limpieza adicional de datos
+                self.df['movimiento'] = self.df['movimiento'].str.upper().fillna('')
+                self.df['almacen'] = self.df['almacen'].str.strip().fillna('')
+                self.df['almacen actual'] = self.df['almacen actual'].str.strip().fillna('')
 
-            st.success("✅ Datos cargados exitosamente")
-            return True
+                st.success("✅ Datos cargados exitosamente")
+                return True
+
+        except Exception as e:
+            st.error(f"Error al cargar datos: {str(e)}")
+            return False
+
+    def run_dashboard(self):
+        """Ejecuta el dashboard principal"""
+        try:
+            st.markdown(f"""
+                <h1 style='text-align: center; color: {self.COLOR_SCHEME['primary']}; padding: 1rem 0;'>
+                    📦 Dashboard de Inventario COHESA
+                </h1>
+            """, unsafe_allow_html=True)
+
+            with st.sidebar:
+                st.markdown("### ⚙️ Control del Dashboard")
+                st.write("🕒 Última actualización:", datetime.now().strftime("%H:%M:%S"))
+
+                if st.button('🔄 Actualizar Datos', key="refresh_button"):
+                    st.cache_data.clear()
+                    st.rerun()
+
+            if not self.load_data():
+                return
+
+            tab1, tab2, tab3 = st.tabs(["📊 Stock", "💰 Ventas", "🎯 Vista Comercial"])
+
+            with tab1:
+                self.stock_view()
+
+            with tab2:
+                self.ventas_view()
+
+            with tab3:
+                self.vista_comercial()
+
+        except Exception as e:
+            st.error(f"Error en el dashboard: {str(e)}")
+
 
     def calcular_stock_actual(self) -> pd.DataFrame:
         """Calcula el stock actual considerando los pesos normalizados"""
